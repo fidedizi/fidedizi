@@ -14,5 +14,8 @@ export function formatWhatsApp(fullNumber: string) {
   const match = fullNumber.match(/^55(\d{2})(\d{4,5})(\d{4})$/);
   if (!match) return fullNumber;
   const [, ddd, prefix, suffix] = match;
-  return `(${ddd}) ${prefix}-${suffix}`;
+  // Alguns números ainda estão salvos no formato antigo, sem o "nono dígito"
+  // (8 dígitos no total) — normaliza a exibição para sempre ter 9 dígitos.
+  const normalizedPrefix = prefix.length === 4 ? `9${prefix}` : prefix;
+  return `(${ddd}) ${normalizedPrefix}-${suffix}`;
 }
