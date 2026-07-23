@@ -1,0 +1,575 @@
+// FideDizi — schema multi-tenant (Arquidiocese/Diocese > Paroquia > Capela/Comunidade)
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Hierarquia institucional
+// ---------------------------------------------------------------------------
+
+enum InstitutionType {
+  ARQUIDIOCESE
+  DIOCESE
+  PAROQUIA
+  CAPELA
+  COMUNIDADE
+}
+
+enum InstitutionStatus {
+  PENDING_ONBOARDING
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+}
+
+model Institution {
+  id     String            @id @default(cuid())
+  type   InstitutionType
+  name   String
+  cnpj   String            @unique
+  status InstitutionStatus @default(PENDING_ONBOARDING)
+
+  address     String?
+  city        String?
+  state       String?
+  contactName String? // responsável
+  phone       String?
+  email       String?
+
+  // Chave Pix institucional — usada pelo chatbot quando o fiel contribui com
+  // dízimo/oferta pela conversa (não vinculado a uma campanha específica).
+  pixKey String?
+
+  parentId String?
+  parent   Institution?  @relation("InstitutionHierarchy", fields: [parentId], references: [id])
+  children Institution[] @relation("InstitutionHierarchy")
+
+  splitConfig SplitConfig?
+  receiver    Receiver?
+
+  users            User[]
+  members          Member[]
+  contributions    Contribution[]
+  campaigns        Campaign[]
+  events           Event[]
+  messageTemplates MessageTemplate[]
+  messageSchedules MessageSchedule[]
+  flags            Flag[]
+  chatSessions     ChatSession[]
+  prayerRequests   PrayerRequest[]
+  massSchedules    MassSchedule[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([parentId])
+  @@index([type])
+}
+
+// Percentual de comissão FideDizi, parametrizável por instituição (Painel Master)
+model SplitConfig {
+  id             String      @id @default(cuid())
+  institutionId  String      @unique
+  institution    Institution @relation(fields: [institutionId], references: [id])
+  commissionRate Decimal     @db.Decimal(5, 2) // ex: 5.00 = 5%
+  updatedAt      DateTime    @updatedAt
+  createdAt      DateTime    @default(now())
+}
+
+// Onboarding de recebedor no gateway de pagamento (Pagar.me/Asaas)
+enum ReceiverStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Receiver {
+  id              String         @id @default(cuid())
+  institutionId   String         @unique
+  institution     Institution    @relation(fields: [institutionId], references: [id])
+  gatewayProvider String // "pagarme" | "asaas"
+  externalId      String // id do recebedor no gateway
+  status          ReceiverStatus @default(PENDING)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Usuários administrativos e permissões (multi-admin, 6 níveis granulares)
+// ---------------------------------------------------------------------------
+
+enum PermissionModule {
+  DASHBOARD
+  AVISOS
+  AGENDA
+  FINANCEIRO
+  CAMPANHAS
+  MEMBROS
+  CONFIGURACOES
+}
+
+enum UserScope {
+  MASTER // CEO FideDizi
+  DIOCESE // Arquidiocese/Diocese
+  PAROQUIA // Paróquia (admin/pároco/colaborador)
+}
+
+model User {
+  id            String           @id @default(cuid())
+  name          String
+  email         String           @unique
+  passwordHash  String
+  scope         UserScope
+  // Dono original da instituição (ex.: o Pároco) — acesso total, não pode
+  // ter permissões revogadas nem ser excluído por outro administrador.
+  isOwner       Boolean          @default(false)
+  // Força a troca de senha no próximo login (ex.: senha provisória definida
+  // pelo pároco ao cadastrar um novo usuário).
+  mustChangePassword Boolean     @default(false)
+  // Token de ativação enviado por e-mail no cadastro, usado para o usuário
+  // definir a própria senha antes do primeiro acesso.
+  passwordSetupToken          String?   @unique
+  passwordSetupTokenExpiresAt DateTime?
+  institutionId String?
+  institution   Institution?     @relation(fields: [institutionId], references: [id])
+  permissions   UserPermission[]
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([institutionId])
+}
+
+model UserPermission {
+  id      String           @id @default(cuid())
+  userId  String
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  module  PermissionModule
+  canView Boolean          @default(true)
+  canEdit Boolean          @default(false)
+
+  @@unique([userId, module])
+}
+
+// ---------------------------------------------------------------------------
+// Fiéis / dizimistas (CRM)
+// ---------------------------------------------------------------------------
+
+model Member {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id])
+
+  name           String
+  whatsapp       String // número do fiel, usado no roteamento por tenant
+  birthDate      DateTime?
+  email          String?
+  address        String?
+  donationMethod DonationMethod @default(AVULSO)
+  isActiveTither Boolean        @default(false)
+  notes          String?        @db.Text
+
+  flags          MemberFlag[]
+  contributions  Contribution[]
+  messages       MemberMessage[]
+  chatSessions   ChatSession[]
+  prayerRequests PrayerRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([institutionId, whatsapp])
+  @@index([whatsapp])
+}
+
+enum DonationMethod {
+  AVULSO
+  RECORRENTE
+}
+
+// Histórico de mensagens enviadas a um fiel (registro manual, já que o disparo
+// automático depende da integração com WhatsApp que ainda não existe)
+model MemberMessage {
+  id       String         @id @default(cuid())
+  memberId String
+  member   Member         @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  trigger  MessageTrigger
+  sentAt   DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([memberId, sentAt])
+}
+
+// Pastorais/movimentos (Catequese, ECC, Ministros...) por instituição
+model Flag {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id])
+  name          String
+
+  members MemberFlag[]
+
+  @@unique([institutionId, name])
+}
+
+model MemberFlag {
+  memberId String
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  flagId   String
+  flag     Flag   @relation(fields: [flagId], references: [id], onDelete: Cascade)
+
+  @@id([memberId, flagId])
+}
+
+// ---------------------------------------------------------------------------
+// Arrecadação
+// ---------------------------------------------------------------------------
+
+enum ContributionType {
+  DIZIMO
+  OFERTA
+  CAMPANHA
+  EVENTO
+}
+
+enum ContributionMethod {
+  PIX
+  CARTAO
+  ESPECIE
+}
+
+enum ContributionStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  REFUNDED
+}
+
+model Contribution {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id])
+  memberId      String?
+  member        Member?     @relation(fields: [memberId], references: [id], onDelete: SetNull)
+  campaignId    String?
+  campaign      Campaign?   @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  type   ContributionType
+  method ContributionMethod
+  status ContributionStatus @default(PENDING)
+
+  grossAmount Decimal @db.Decimal(12, 2) // valor bruto
+  feeAmount   Decimal @default(0) @db.Decimal(12, 2) // comissão FideDizi
+  netAmount   Decimal @db.Decimal(12, 2) // valor líquido para a instituição
+
+  gatewayTransactionId String?
+  isRecurring          Boolean @default(false)
+
+  // Dados do comprador em vendas de ingresso avulsas (sem cadastro de fiel)
+  buyerName  String?
+  buyerPhone String?
+  buyerEmail String?
+  tickets    Ticket[]
+  raffleNumbers RaffleNumber[]
+  pizzaOrderItems PizzaOrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([institutionId, createdAt])
+  @@index([type])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Campanhas (ex: reforma da igreja)
+// ---------------------------------------------------------------------------
+
+// Tipo escolhido na criação da campanha — define quais campos/telas de
+// configuração se aplicam (meta manual, rifa ou venda de pizza).
+enum CampaignType {
+  PADRAO
+  RIFA
+  PIZZA
+}
+
+model Campaign {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id])
+
+  type        CampaignType @default(PADRAO)
+  title       String
+  description String?
+  // Meta manual — usada apenas para campanhas do tipo PADRAO. Para RIFA e
+  // PIZZA a meta é calculada automaticamente (números × valor, ou soma dos
+  // sabores).
+  goalAmount  Decimal?  @db.Decimal(12, 2)
+  startsAt    DateTime  @default(now())
+  endsAt      DateTime?
+
+  // Configuração de venda de números de rifa (campanhas do tipo RIFA)
+  raffleTotalNumbers Int?
+  raffleNumberPrice  Decimal? @db.Decimal(10, 2)
+
+  // Chave Pix própria da campanha. Quando preenchida, é usada nas vendas por
+  // Pix desta campanha; quando vazia, usa-se a integração de Pix padrão da
+  // paróquia.
+  pixKey String?
+
+  contributions Contribution[]
+  raffleNumbers RaffleNumber[]
+  pizzaFlavors  PizzaFlavor[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([institutionId])
+}
+
+// Número de rifa vendido dentro de uma campanha — atribuído sequencialmente
+// no momento da venda (não pré-gerado), até o limite de raffleTotalNumbers.
+model RaffleNumber {
+  id             String        @id @default(cuid())
+  campaignId     String
+  campaign       Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  number         Int
+  contributionId String?
+  contribution   Contribution? @relation(fields: [contributionId], references: [id])
+  buyerName      String
+  buyerPhone     String
+
+  createdAt DateTime @default(now())
+
+  @@unique([campaignId, number])
+  @@index([campaignId])
+}
+
+// Sabor de pizza cadastrado para venda dentro de uma campanha, com
+// quantidade produzida (estoque) e valor próprios.
+model PizzaFlavor {
+  id            String   @id @default(cuid())
+  campaignId    String
+  campaign      Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  name          String
+  price         Decimal  @db.Decimal(10, 2)
+  stockQuantity Int
+
+  orderItems PizzaOrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([campaignId, name])
+  @@index([campaignId])
+}
+
+// Item de um pedido de pizza — a venda de um sabor pode ser feita
+// manualmente ou via WhatsApp (WhatsApp quando buyerPhone é informado).
+model PizzaOrderItem {
+  id             String        @id @default(cuid())
+  flavorId       String
+  flavor         PizzaFlavor   @relation(fields: [flavorId], references: [id], onDelete: Cascade)
+  contributionId String?
+  contribution   Contribution? @relation(fields: [contributionId], references: [id])
+  quantity       Int
+  buyerName      String
+  buyerPhone     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([flavorId])
+  @@index([contributionId])
+}
+
+// ---------------------------------------------------------------------------
+// Eventos e ingressos (quermesses)
+// ---------------------------------------------------------------------------
+
+enum EventStatus {
+  ATIVO
+  INATIVO
+  ENCERRADO
+}
+
+model Event {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id])
+
+  title       String
+  description String?
+  startsAt    DateTime
+  location    String?
+  adultPrice  Decimal     @db.Decimal(10, 2)
+  childPrice  Decimal     @db.Decimal(10, 2)
+  capacity    Int
+  status      EventStatus @default(ATIVO)
+
+  tickets Ticket[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([institutionId, startsAt])
+}
+
+enum TicketCategory {
+  ADULTO
+  CRIANCA
+}
+
+enum TicketStatus {
+  VALID
+  USED
+  CANCELLED
+}
+
+model Ticket {
+  id             String        @id @default(cuid())
+  eventId        String
+  event          Event         @relation(fields: [eventId], references: [id])
+  contributionId String?
+  contribution   Contribution? @relation(fields: [contributionId], references: [id])
+
+  category     TicketCategory
+  qrCode       String         @unique // token único validado server-side
+  status       TicketStatus   @default(VALID)
+  usedAt       DateTime?
+  usedByUserId String? // voluntário que validou (scanner)
+
+  createdAt DateTime @default(now())
+
+  @@index([eventId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Mensagens automáticas (WhatsApp)
+// ---------------------------------------------------------------------------
+
+enum MessageTrigger {
+  WELCOME
+  BIRTHDAY
+  DONATION_RECEIPT
+  CAMPAIGN
+  GENERAL_NOTICE
+  TITHE_REMINDER
+  EVENTO
+  TITHE_RECEIPT
+}
+
+model MessageTemplate {
+  id            String         @id @default(cuid())
+  institutionId String
+  institution   Institution    @relation(fields: [institutionId], references: [id])
+  trigger       MessageTrigger
+  body          String         @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([institutionId, trigger])
+}
+
+enum MessageScheduleStatus {
+  AWAITING_SCHEDULE
+  SCHEDULED
+  SENT
+  FAILED
+}
+
+model MessageSchedule {
+  id            String                @id @default(cuid())
+  institutionId String
+  institution   Institution           @relation(fields: [institutionId], references: [id])
+  trigger       MessageTrigger
+  status        MessageScheduleStatus @default(AWAITING_SCHEDULE)
+  scheduledFor  DateTime?
+  sentAt        DateTime?
+  bullJobId     String? // id do job no BullMQ
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([institutionId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Chatbot de WhatsApp (atendimento conversacional)
+// ---------------------------------------------------------------------------
+
+enum ChatState {
+  MAIN_MENU
+  AWAITING_PRAYER_REQUEST
+  AWAITING_CONTRIBUTION_TYPE
+  AWAITING_CONTRIBUTION_AMOUNT
+}
+
+// Uma sessão por número de telefone — guarda em que ponto da conversa o fiel
+// está, já que cada mensagem recebida chega como uma requisição HTTP isolada
+// (sem memória entre elas por conta própria).
+model ChatSession {
+  id            String       @id @default(cuid())
+  phone         String       @unique // dígitos normalizados, sem "whatsapp:" nem "+"
+  institutionId String?
+  institution   Institution? @relation(fields: [institutionId], references: [id])
+  memberId      String?
+  member        Member?      @relation(fields: [memberId], references: [id])
+  state         ChatState    @default(MAIN_MENU)
+  context       String?      @db.Text // JSON com dados temporários do fluxo atual
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([institutionId])
+}
+
+model PrayerRequest {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id])
+  memberId      String?
+  member        Member?     @relation(fields: [memberId], references: [id])
+  phone         String
+  message       String      @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@index([institutionId])
+}
+
+// ---------------------------------------------------------------------------
+// Horários de missas
+// ---------------------------------------------------------------------------
+
+// Declarado em ordem de segunda a domingo — Postgres ordena enums pela ordem
+// de declaração, então `orderBy: dayOfWeek` já sai na ordem certa da semana.
+enum Weekday {
+  SEGUNDA
+  TERCA
+  QUARTA
+  QUINTA
+  SEXTA
+  SABADO
+  DOMINGO
+}
+
+model MassSchedule {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id])
+  dayOfWeek     Weekday
+  time          String // "HH:MM" — sem fuso, é só um horário de referência semanal
+  description   String? // ex.: "Missa Solene", "Missa das Crianças"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([institutionId])
+}
