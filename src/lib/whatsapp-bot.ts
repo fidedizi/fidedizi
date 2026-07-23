@@ -13,6 +13,11 @@ import { CONTRIBUTION_TYPE_LABELS } from "@/lib/receipt";
 import { WEEKDAY_LABELS } from "@/lib/labels";
 import { formatWhatsApp } from "@/lib/whatsapp";
 
+export type BotReply = {
+  text?: string;
+  content?: { contentSid: string; variables?: Record<string, string> };
+};
+
 // Dado um número em qualquer formato (com/sem "whatsapp:", "+", pontuação),
 // retorna as variantes possíveis com DDI já que o número local de um fiel
 // pode estar cadastrado com 8 ou 9 dígitos (ver nota sobre o "nono dígito"
@@ -43,9 +48,33 @@ function mainMenuText(name: string) {
 Responda com o número da opção. Digite *0* a qualquer momento para voltar a este menu.`;
 }
 
-type MemberWithInstitution = Awaited<
-  ReturnType<typeof findMemberByPhone>
->;
+// Monta a resposta do menu principal. Quando o Content Template (list-picker)
+// está configurado, envia o menu de verdade como botões interativos; sem
+// ele, cai de volta no texto simples numerado.
+function menuReply(text: string | undefined, memberName: string): BotReply {
+  const menuContentSid = process.env.TWILIO_MENU_CONTENT_SID;
+  if (!menuContentSid) {
+    return {
+      text: [text, mainMenuText(memberName)].filter(Boolean).join("\n\n"),
+    };
+  }
+  return {
+    text,
+    content: { contentSid: menuContentSid, variables: { "1": memberName } },
+  };
+}
+
+function contributionChoiceReply(): BotReply {
+  const contentSid = process.env.TWILIO_CONTRIBUTION_TYPE_CONTENT_SID;
+  if (!contentSid) {
+    return {
+      text: "Você quer contribuir com:\n\n1️⃣ Dízimo\n2️⃣ Oferta\n\nResponda com o número.",
+    };
+  }
+  return { content: { contentSid } };
+}
+
+type MemberWithInstitution = Awaited<ReturnType<typeof findMemberByPhone>>;
 
 // Se o mesmo número estiver cadastrado em mais de uma instituição (ex.: o
 // fiel se mudou e se cadastrou de novo em outra paróquia/capela/comunidade),
@@ -92,7 +121,7 @@ async function finishRegistration(
   digits: string,
   context: { name?: string; birthDate?: string },
   institution: { id: string; name: string },
-) {
+): Promise<BotReply> {
   const name = context.name ?? "";
   const birthDate = context.birthDate ? new Date(context.birthDate) : null;
 
@@ -125,12 +154,18 @@ async function finishRegistration(
   });
   const defaultWelcome = `Seja muito bem-vindo(a), ${member.name}!`;
 
-  return `Cadastro realizado com sucesso! 🎉\n\n${template?.body ?? defaultWelcome}\n\n${mainMenuText(member.name)}`;
+  return menuReply(
+    `Cadastro realizado com sucesso! 🎉\n\n${template?.body ?? defaultWelcome}`,
+    member.name,
+  );
 }
 
 // Número desconhecido: em vez de só recusar, conduz um cadastro rápido
 // (nome, data de nascimento, paróquia/capela/comunidade) e já cria o fiel.
-async function handleUnregisteredContact(digits: string, body: string) {
+async function handleUnregisteredContact(
+  digits: string,
+  body: string,
+): Promise<BotReply> {
   const session = await prisma.chatSession.findUnique({
     where: { phone: digits },
   });
@@ -139,7 +174,9 @@ async function handleUnregisteredContact(digits: string, body: string) {
     await prisma.chatSession.create({
       data: { phone: digits, state: ChatState.AWAITING_REGISTRATION_NAME },
     });
-    return "Não encontramos seu cadastro. Vamos criar um agora! 😊\n\nQual é o seu nome completo?";
+    return {
+      text: "Não encontramos seu cadastro. Vamos criar um agora! 😊\n\nQual é o seu nome completo?",
+    };
   }
 
   const context: {
@@ -152,7 +189,7 @@ async function handleUnregisteredContact(digits: string, body: string) {
     case ChatState.AWAITING_REGISTRATION_NAME: {
       const name = body.trim();
       if (name.length < 3) {
-        return "Por favor, informe seu nome completo.";
+        return { text: "Por favor, informe seu nome completo." };
       }
       await prisma.chatSession.update({
         where: { id: session.id },
@@ -161,13 +198,15 @@ async function handleUnregisteredContact(digits: string, body: string) {
           context: JSON.stringify({ ...context, name }),
         },
       });
-      return "Qual é a sua data de nascimento? (formato DD/MM/AAAA)";
+      return { text: "Qual é a sua data de nascimento? (formato DD/MM/AAAA)" };
     }
 
     case ChatState.AWAITING_REGISTRATION_BIRTHDATE: {
       const birthDate = parseBirthDate(body);
       if (!birthDate) {
-        return "Data inválida. Informe no formato DD/MM/AAAA (ex.: 15/03/1990).";
+        return {
+          text: "Data inválida. Informe no formato DD/MM/AAAA (ex.: 15/03/1990).",
+        };
       }
       await prisma.chatSession.update({
         where: { id: session.id },
@@ -179,14 +218,18 @@ async function handleUnregisteredContact(digits: string, body: string) {
           }),
         },
       });
-      return "De qual paróquia, capela ou comunidade você faz parte? Digite o nome (ou parte dele).";
+      return {
+        text: "De qual paróquia, capela ou comunidade você faz parte? Digite o nome (ou parte dele).",
+      };
     }
 
     case ChatState.AWAITING_REGISTRATION_INSTITUTION: {
       const matches = await searchInstitutionsByName(body.trim());
 
       if (matches.length === 0) {
-        return "Não encontramos nenhuma paróquia, capela ou comunidade com esse nome. Tente digitar de outra forma, ou entre em contato com a secretaria.";
+        return {
+          text: "Não encontramos nenhuma paróquia, capela ou comunidade com esse nome. Tente digitar de outra forma, ou entre em contato com a secretaria.",
+        };
       }
 
       if (matches.length === 1) {
@@ -210,14 +253,16 @@ async function handleUnregisteredContact(digits: string, body: string) {
           }),
         },
       });
-      return `Encontramos mais de uma opção. Qual é a certa?\n\n${list}\n\nResponda com o número.`;
+      return {
+        text: `Encontramos mais de uma opção. Qual é a certa?\n\n${list}\n\nResponda com o número.`,
+      };
     }
 
     case ChatState.AWAITING_REGISTRATION_INSTITUTION_CHOICE: {
       const candidates = context.institutionCandidates ?? [];
       const chosen = candidates[Number(body.trim()) - 1];
       if (!chosen) {
-        return "Responda com o número de uma das opções listadas.";
+        return { text: "Responda com o número de uma das opções listadas." };
       }
       return finishRegistration(session.id, digits, context, chosen);
     }
@@ -227,7 +272,7 @@ async function handleUnregisteredContact(digits: string, body: string) {
         where: { id: session.id },
         data: { state: ChatState.AWAITING_REGISTRATION_NAME, context: null },
       });
-      return "Vamos recomeçar seu cadastro. Qual é o seu nome completo?";
+      return { text: "Vamos recomeçar seu cadastro. Qual é o seu nome completo?" };
     }
   }
 }
@@ -343,33 +388,35 @@ async function handleMainMenuChoice(
   member: NonNullable<MemberWithInstitution>,
   sessionId: string,
   choice: string,
-) {
+): Promise<BotReply> {
   switch (choice.trim()) {
     case "1":
-      return handleMassSchedulesAndEvents(member.institutionId);
+      return { text: await handleMassSchedulesAndEvents(member.institutionId) };
 
     case "2":
       await prisma.chatSession.update({
         where: { id: sessionId },
         data: { state: ChatState.AWAITING_PRAYER_REQUEST },
       });
-      return "Pode escrever seu pedido de oração. Vamos rezar por essa intenção. 🙏";
+      return {
+        text: "Pode escrever seu pedido de oração. Vamos rezar por essa intenção. 🙏",
+      };
 
     case "3":
       await prisma.chatSession.update({
         where: { id: sessionId },
         data: { state: ChatState.AWAITING_CONTRIBUTION_TYPE },
       });
-      return "Você quer contribuir com:\n\n1️⃣ Dízimo\n2️⃣ Oferta\n\nResponda com o número.";
+      return contributionChoiceReply();
 
     case "4":
-      return handleContributionHistory(member.id);
+      return { text: await handleContributionHistory(member.id) };
 
     case "5":
-      return handlePastoralContact(member.institutionId);
+      return { text: await handlePastoralContact(member.institutionId) };
 
     default:
-      return `Não entendi sua resposta.\n\n${mainMenuText(member.name)}`;
+      return menuReply("Não entendi sua resposta.", member.name);
   }
 }
 
@@ -378,7 +425,7 @@ async function handlePrayerRequest(
   sessionId: string,
   phone: string,
   body: string,
-) {
+): Promise<BotReply> {
   await prisma.prayerRequest.create({
     data: {
       institutionId: member.institutionId,
@@ -393,17 +440,19 @@ async function handlePrayerRequest(
     data: { state: ChatState.MAIN_MENU },
   });
 
-  return `Recebemos seu pedido de oração. 🙏 Nossa comunidade vai rezar por essa intenção.\n\n${mainMenuText(member.name)}`;
+  return menuReply(
+    "Recebemos seu pedido de oração. 🙏 Nossa comunidade vai rezar por essa intenção.",
+    member.name,
+  );
 }
 
 async function handleContributionType(
-  member: NonNullable<MemberWithInstitution>,
   sessionId: string,
   body: string,
-) {
+): Promise<BotReply> {
   const choice = body.trim();
   if (choice !== "1" && choice !== "2") {
-    return "Responda com *1* para Dízimo ou *2* para Oferta.";
+    return { text: "Responda com *1* para Dízimo ou *2* para Oferta." };
   }
 
   const type = choice === "1" ? "DIZIMO" : "OFERTA";
@@ -416,7 +465,9 @@ async function handleContributionType(
     },
   });
 
-  return "Qual valor você deseja contribuir? Responda só com o número (ex.: 50 ou 50,00).";
+  return {
+    text: "Qual valor você deseja contribuir? Responda só com o número (ex.: 50 ou 50,00).",
+  };
 }
 
 async function handleContributionAmount(
@@ -424,7 +475,7 @@ async function handleContributionAmount(
   sessionId: string,
   contextRaw: string | null,
   body: string,
-) {
+): Promise<BotReply> {
   const normalized = body
     .trim()
     .replace(/[^\d.,]/g, "")
@@ -433,7 +484,9 @@ async function handleContributionAmount(
   const amount = Number(normalized);
 
   if (!amount || amount <= 0) {
-    return "Valor inválido. Responda só com o número (ex.: 50 ou 50,00).";
+    return {
+      text: "Valor inválido. Responda só com o número (ex.: 50 ou 50,00).",
+    };
   }
 
   const context = contextRaw ? JSON.parse(contextRaw) : {};
@@ -462,13 +515,16 @@ async function handleContributionAmount(
     ? `Chave Pix para pagamento: \`${member.institution.pixKey}\``
     : "Nossa secretaria vai entrar em contato para combinar o pagamento.";
 
-  return `Combinado! Registramos sua contribuição de ${formatBRL(amount)} (${CONTRIBUTION_TYPE_LABELS[type]}).\n\n${pixLine}\n\nAssim que o pagamento for confirmado, você recebe a confirmação por aqui. Obrigado pela generosidade! 💙\n\n${mainMenuText(member.name)}`;
+  return menuReply(
+    `Combinado! Registramos sua contribuição de ${formatBRL(amount)} (${CONTRIBUTION_TYPE_LABELS[type]}).\n\n${pixLine}\n\nAssim que o pagamento for confirmado, você recebe a confirmação por aqui. Obrigado pela generosidade! 💙`,
+    member.name,
+  );
 }
 
 export async function handleIncomingWhatsAppMessage(
   fromRaw: string,
   bodyRaw: string,
-) {
+): Promise<BotReply> {
   const digits = fromRaw.replace(/\D/g, "");
   const body = bodyRaw.trim();
 
@@ -499,60 +555,46 @@ export async function handleIncomingWhatsAppMessage(
     });
   }
 
-  let welcomePrefix = "";
-  if (isFirstContact) {
-    const template = await prisma.messageTemplate.findUnique({
-      where: {
-        institutionId_trigger: {
-          institutionId: member.institutionId,
-          trigger: MessageTrigger.WELCOME,
-        },
-      },
-    });
-    const defaultWelcome = `Seja muito bem-vindo(a), ${member.name}!`;
-    welcomePrefix = `${template?.body ?? defaultWelcome}\n\n`;
-  }
-
   if (isFirstContact || body === "0" || body.toLowerCase() === "menu") {
     await prisma.chatSession.update({
       where: { id: session.id },
       data: { state: ChatState.MAIN_MENU, context: null },
     });
-    return welcomePrefix + mainMenuText(member.name);
+
+    let welcomeText: string | undefined;
+    if (isFirstContact) {
+      const template = await prisma.messageTemplate.findUnique({
+        where: {
+          institutionId_trigger: {
+            institutionId: member.institutionId,
+            trigger: MessageTrigger.WELCOME,
+          },
+        },
+      });
+      welcomeText = template?.body ?? `Seja muito bem-vindo(a), ${member.name}!`;
+    }
+
+    return menuReply(welcomeText, member.name);
   }
 
   switch (session.state) {
     case ChatState.AWAITING_PRAYER_REQUEST:
-      return (
-        welcomePrefix +
-        (await handlePrayerRequest(member, session.id, digits, body))
-      );
+      return handlePrayerRequest(member, session.id, digits, body);
     case ChatState.AWAITING_CONTRIBUTION_TYPE:
-      return (
-        welcomePrefix + (await handleContributionType(member, session.id, body))
-      );
+      return handleContributionType(session.id, body);
     case ChatState.AWAITING_CONTRIBUTION_AMOUNT:
-      return (
-        welcomePrefix +
-        (await handleContributionAmount(
-          member,
-          session.id,
-          session.context,
-          body,
-        ))
-      );
+      return handleContributionAmount(member, session.id, session.context, body);
     case ChatState.MAIN_MENU:
     default:
-      return (
-        welcomePrefix +
-        (await handleMainMenuChoice(member, session.id, body))
-      );
+      return handleMainMenuChoice(member, session.id, body);
   }
 }
 
-export function buildTwiml(message: string) {
+export function buildTwiml(message?: string) {
   const MessagingResponse = twilio.twiml.MessagingResponse;
   const response = new MessagingResponse();
-  response.message(message);
+  if (message) {
+    response.message(message);
+  }
   return response.toString();
 }

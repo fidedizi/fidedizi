@@ -1,5 +1,10 @@
 import twilio from "twilio";
-import { handleIncomingWhatsAppMessage, buildTwiml } from "@/lib/whatsapp-bot";
+import {
+  handleIncomingWhatsAppMessage,
+  buildTwiml,
+  type BotReply,
+} from "@/lib/whatsapp-bot";
+import { sendContentMessage } from "@/lib/whatsapp-sender";
 
 // Webhook público (sem sessão) chamado diretamente pela Twilio a cada
 // mensagem de WhatsApp recebida. A autenticidade é garantida pela assinatura
@@ -27,18 +32,25 @@ export async function POST(request: Request) {
   }
 
   const from = params.From ?? "";
-  const body = params.Body ?? "";
+  // Ao tocar num botão/item de lista, a Twilio manda a escolha em
+  // ButtonPayload (o "id" que definimos no Content Template) em vez de Body.
+  const body = params.ButtonPayload || params.Body || "";
 
-  let replyText: string;
+  let reply: BotReply;
   try {
-    replyText = await handleIncomingWhatsAppMessage(from, body);
+    reply = await handleIncomingWhatsAppMessage(from, body);
   } catch (error) {
     console.error("[WhatsApp Bot] Erro ao processar mensagem:", error);
-    replyText =
-      "Desculpe, tivemos um problema ao processar sua mensagem. Tente novamente em instantes.";
+    reply = {
+      text: "Desculpe, tivemos um problema ao processar sua mensagem. Tente novamente em instantes.",
+    };
   }
 
-  return new Response(buildTwiml(replyText), {
+  if (reply.content) {
+    await sendContentMessage(from, reply.content.contentSid, reply.content.variables);
+  }
+
+  return new Response(buildTwiml(reply.text), {
     headers: { "Content-Type": "text/xml" },
   });
 }

@@ -78,6 +78,33 @@ async function createMessage(to: string, message: string, mediaUrl?: string) {
   }
 }
 
+// Usada só pelo chatbot: o número de destino já vem exatamente como a
+// Twilio nos entregou na mensagem recebida (sem a ambiguidade do "nono
+// dígito" de um envio às cegas), então não precisa do fallback abaixo.
+export async function sendContentMessage(
+  to: string,
+  contentSid: string,
+  variables?: Record<string, string>,
+) {
+  if (!client || !TWILIO_WHATSAPP_FROM) {
+    console.log(
+      `[WhatsApp] Twilio não configurado — menu interativo simulado para ${to} (contentSid=${contentSid})`,
+    );
+    return;
+  }
+
+  try {
+    await client.messages.create({
+      from: TWILIO_WHATSAPP_FROM,
+      to,
+      contentSid,
+      ...(variables ? { contentVariables: JSON.stringify(variables) } : {}),
+    });
+  } catch (error) {
+    console.error(`[WhatsApp] Falha ao enviar menu interativo para ${to}:`, error);
+  }
+}
+
 export async function sendWhatsAppMessage(
   phone: string,
   message: string,
