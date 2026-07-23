@@ -13,6 +13,7 @@ type CampaignData = {
   goalAmount: string;
   endsAt: string;
   pixKey: string;
+  availableInChatbot: boolean;
 };
 
 export function EditCampaignForm({ campaign }: { campaign: CampaignData }) {
@@ -105,6 +106,20 @@ export function EditCampaignForm({ campaign }: { campaign: CampaignData }) {
               {state.errors.goalAmount[0]}
             </p>
           )}
+        </div>
+      )}
+
+      {campaign.type === "PADRAO" && (
+        <div className="flex items-end">
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              name="availableInChatbot"
+              value="true"
+              defaultChecked={campaign.availableInChatbot}
+            />
+            Disponibilizar no chatbot do WhatsApp
+          </label>
         </div>
       )}
 

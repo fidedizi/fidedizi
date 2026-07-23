@@ -139,6 +139,19 @@ export function CampaignForm() {
           </div>
         )}
 
+        {type === "PADRAO" && (
+          <div className="flex items-end">
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                name="availableInChatbot"
+                value="true"
+              />
+              Disponibilizar no chatbot do WhatsApp
+            </label>
+          </div>
+        )}
+
         {type === "RIFA" && (
           <>
             <div className="flex flex-col gap-1">

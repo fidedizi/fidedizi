@@ -36,6 +36,7 @@ export default async function EditarCampanhaPage({
             ? campaign.endsAt.toISOString().slice(0, 10)
             : "",
           pixKey: campaign.pixKey ?? "",
+          availableInChatbot: campaign.availableInChatbot,
         }}
       />
     </div>

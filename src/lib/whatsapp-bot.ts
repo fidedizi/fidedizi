@@ -12,11 +12,24 @@ import { formatBRL } from "@/lib/format";
 import { CONTRIBUTION_TYPE_LABELS } from "@/lib/receipt";
 import { WEEKDAY_LABELS } from "@/lib/labels";
 import { formatWhatsApp } from "@/lib/whatsapp";
+import { calculateSplit } from "@/lib/split";
 
 export type BotReply = {
   text?: string;
   content?: { contentSid: string; variables?: Record<string, string> };
 };
+
+type MenuOption = { id: string; label: string };
+
+const NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"];
+
+const BASE_MENU_OPTIONS: MenuOption[] = [
+  { id: "dizimo", label: "Dízimo" },
+  { id: "oferta", label: "Oferta" },
+  { id: "missas", label: "Missas e eventos" },
+  { id: "oracao", label: "Pedido de oração" },
+  { id: "historico", label: "Meu histórico" },
+];
 
 // Dado um número em qualquer formato (com/sem "whatsapp:", "+", pontuação),
 // retorna as variantes possíveis com DDI já que o número local de um fiel
@@ -36,33 +49,75 @@ function phoneDigitVariants(rawPhone: string): string[] {
   return [digits];
 }
 
-function mainMenuText(name: string) {
+async function getEligibleChatbotCampaigns(institutionId: string) {
+  return prisma.campaign.findMany({
+    where: {
+      institutionId,
+      type: "PADRAO",
+      availableInChatbot: true,
+      OR: [{ endsAt: null }, { endsAt: { gte: new Date() } }],
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+// Monta a lista de opções do menu para esta instituição — "Campanha" só
+// aparece quando há alguma campanha marcada como disponível no chatbot.
+async function buildMenu(institutionId: string) {
+  const eligibleCampaigns = await getEligibleChatbotCampaigns(institutionId);
+  const options = [...BASE_MENU_OPTIONS];
+  if (eligibleCampaigns.length > 0) {
+    options.push({ id: "campanha", label: "Campanha" });
+  }
+  options.push({ id: "secretaria", label: "Secretaria" });
+  return { options, eligibleCampaigns };
+}
+
+function mainMenuText(name: string, options: MenuOption[]) {
+  const lines = options
+    .map((option, index) => `${NUMBER_EMOJIS[index] ?? `${index + 1}.`} ${option.label}`)
+    .join("\n");
+
   return `Olá, ${name}! Como posso te ajudar hoje?
 
-1️⃣ Horários de missas e eventos
-2️⃣ Enviar pedido de oração
-3️⃣ Contribuir com Dízimo
-4️⃣ Contribuir com Oferta
-5️⃣ Consultar meu histórico de contribuições
-6️⃣ Falar com a equipe pastoral
+${lines}
 
 Responda com o número da opção. Digite *0* a qualquer momento para voltar a este menu.`;
 }
 
 // Monta a resposta do menu principal. Quando o Content Template (list-picker)
-// está configurado, envia o menu de verdade como botões interativos; sem
-// ele, cai de volta no texto simples numerado.
-function menuReply(text: string | undefined, memberName: string): BotReply {
-  const menuContentSid = process.env.TWILIO_MENU_CONTENT_SID;
-  if (!menuContentSid) {
+// correspondente está configurado, envia o menu de verdade como botões
+// interativos; sem ele, cai de volta no texto simples numerado.
+function menuReply(
+  text: string | undefined,
+  memberName: string,
+  options: MenuOption[],
+  hasCampaign: boolean,
+): BotReply {
+  const contentSid = hasCampaign
+    ? process.env.TWILIO_MENU_WITH_CAMPAIGN_CONTENT_SID
+    : process.env.TWILIO_MENU_CONTENT_SID;
+
+  if (!contentSid) {
     return {
-      text: [text, mainMenuText(memberName)].filter(Boolean).join("\n\n"),
+      text: [text, mainMenuText(memberName, options)].filter(Boolean).join("\n\n"),
     };
   }
   return {
     text,
-    content: { contentSid: menuContentSid, variables: { "1": memberName } },
+    content: { contentSid, variables: { "1": memberName } },
   };
+}
+
+// Resolve a resposta do usuário (id semântico vindo de um botão tocado, ou
+// número digitado à mão) para o id da opção de menu correspondente.
+function resolveMenuChoice(choice: string, options: MenuOption[]) {
+  const trimmed = choice.trim();
+  if (options.some((option) => option.id === trimmed)) {
+    return trimmed;
+  }
+  const index = Number(trimmed) - 1;
+  return options[index]?.id;
 }
 
 type MemberWithInstitution = Awaited<ReturnType<typeof findMemberByPhone>>;
@@ -94,6 +149,16 @@ function parseBirthDate(text: string): Date | null {
   if (!isRealDate || date > new Date()) return null;
 
   return date;
+}
+
+function parseAmount(text: string): number | null {
+  const normalized = text
+    .trim()
+    .replace(/[^\d.,]/g, "")
+    .replace(/\.(?=\d{3}(?:\D|$))/g, "")
+    .replace(",", ".");
+  const amount = Number(normalized);
+  return amount > 0 ? amount : null;
 }
 
 async function searchInstitutionsByName(query: string) {
@@ -144,10 +209,13 @@ async function finishRegistration(
     },
   });
   const defaultWelcome = `Seja muito bem-vindo(a), ${member.name}!`;
+  const { options, eligibleCampaigns } = await buildMenu(institution.id);
 
   return menuReply(
     `Cadastro realizado com sucesso! 🎉\n\n${template?.body ?? defaultWelcome}`,
     member.name,
+    options,
+    eligibleCampaigns.length > 0,
   );
 }
 
@@ -372,19 +440,173 @@ async function handlePastoralContact(institutionId: string) {
     return "Ainda não temos um contato direto cadastrado. Fale com a secretaria durante o horário de atendimento.";
   }
 
-  return `Fale com nossa equipe pastoral:\n\n${lines.join("\n")}`;
+  return `Fale com a secretaria:\n\n${lines.join("\n")}`;
+}
+
+async function handleCampaignSelection(
+  sessionId: string,
+  eligibleCampaigns: { id: string; title: string }[],
+): Promise<BotReply> {
+  if (eligibleCampaigns.length === 0) {
+    return {
+      text: "No momento não há nenhuma campanha disponível para contribuição pelo WhatsApp.",
+    };
+  }
+
+  if (eligibleCampaigns.length === 1) {
+    const campaign = eligibleCampaigns[0];
+    await prisma.chatSession.update({
+      where: { id: sessionId },
+      data: {
+        state: ChatState.AWAITING_CAMPAIGN_AMOUNT,
+        context: JSON.stringify({
+          campaignId: campaign.id,
+          campaignTitle: campaign.title,
+        }),
+      },
+    });
+    return {
+      text: `Quanto você deseja contribuir para a campanha "${campaign.title}"? Responda só com o número (ex.: 50 ou 50,00).`,
+    };
+  }
+
+  const list = eligibleCampaigns
+    .map((campaign, index) => `${index + 1}️⃣ ${campaign.title}`)
+    .join("\n");
+
+  await prisma.chatSession.update({
+    where: { id: sessionId },
+    data: {
+      state: ChatState.AWAITING_CAMPAIGN_CHOICE,
+      context: JSON.stringify({
+        campaignCandidates: eligibleCampaigns.map((campaign) => ({
+          id: campaign.id,
+          title: campaign.title,
+        })),
+      }),
+    },
+  });
+  return {
+    text: `Para qual campanha você deseja contribuir?\n\n${list}\n\nResponda com o número.`,
+  };
+}
+
+async function handleCampaignChoice(
+  sessionId: string,
+  contextRaw: string | null,
+  body: string,
+): Promise<BotReply> {
+  const context: { campaignCandidates?: { id: string; title: string }[] } =
+    contextRaw ? JSON.parse(contextRaw) : {};
+  const candidates = context.campaignCandidates ?? [];
+  const chosen = candidates[Number(body.trim()) - 1];
+
+  if (!chosen) {
+    return { text: "Responda com o número de uma das campanhas listadas." };
+  }
+
+  await prisma.chatSession.update({
+    where: { id: sessionId },
+    data: {
+      state: ChatState.AWAITING_CAMPAIGN_AMOUNT,
+      context: JSON.stringify({
+        campaignId: chosen.id,
+        campaignTitle: chosen.title,
+      }),
+    },
+  });
+  return {
+    text: `Quanto você deseja contribuir para a campanha "${chosen.title}"? Responda só com o número (ex.: 50 ou 50,00).`,
+  };
+}
+
+async function handleCampaignAmount(
+  member: NonNullable<MemberWithInstitution>,
+  sessionId: string,
+  contextRaw: string | null,
+  body: string,
+  options: MenuOption[],
+  hasCampaign: boolean,
+): Promise<BotReply> {
+  const amount = parseAmount(body);
+  if (!amount) {
+    return {
+      text: "Valor inválido. Responda só com o número (ex.: 50 ou 50,00).",
+    };
+  }
+
+  const context: { campaignId?: string; campaignTitle?: string } = contextRaw
+    ? JSON.parse(contextRaw)
+    : {};
+
+  const campaign = context.campaignId
+    ? await prisma.campaign.findUnique({ where: { id: context.campaignId } })
+    : null;
+
+  if (!campaign) {
+    await prisma.chatSession.update({
+      where: { id: sessionId },
+      data: { state: ChatState.MAIN_MENU, context: null },
+    });
+    return menuReply(
+      "Essa campanha não está mais disponível.",
+      member.name,
+      options,
+      hasCampaign,
+    );
+  }
+
+  const { feeAmount, netAmount } = await calculateSplit(
+    amount,
+    member.institutionId,
+  );
+
+  await prisma.contribution.create({
+    data: {
+      institutionId: member.institutionId,
+      memberId: member.id,
+      campaignId: campaign.id,
+      type: ContributionType.CAMPANHA,
+      method: ContributionMethod.PIX,
+      status: ContributionStatus.PENDING,
+      grossAmount: amount,
+      feeAmount,
+      netAmount,
+    },
+  });
+
+  await prisma.chatSession.update({
+    where: { id: sessionId },
+    data: { state: ChatState.MAIN_MENU, context: null },
+  });
+
+  const pixKey = campaign.pixKey ?? member.institution.pixKey;
+  const pixLine = pixKey
+    ? `Chave Pix para pagamento: \`${pixKey}\``
+    : "Nossa secretaria vai entrar em contato para combinar o pagamento.";
+
+  return menuReply(
+    `Combinado! Registramos sua contribuição de ${formatBRL(amount)} para a campanha "${campaign.title}".\n\n${pixLine}\n\nAssim que o pagamento for confirmado, você recebe a confirmação por aqui. Obrigado pela generosidade! 💙`,
+    member.name,
+    options,
+    hasCampaign,
+  );
 }
 
 async function handleMainMenuChoice(
   member: NonNullable<MemberWithInstitution>,
   sessionId: string,
   choice: string,
+  options: MenuOption[],
+  eligibleCampaigns: { id: string; title: string }[],
 ): Promise<BotReply> {
-  switch (choice.trim()) {
-    case "1":
+  const resolved = resolveMenuChoice(choice, options);
+
+  switch (resolved) {
+    case "missas":
       return { text: await handleMassSchedulesAndEvents(member.institutionId) };
 
-    case "2":
+    case "oracao":
       await prisma.chatSession.update({
         where: { id: sessionId },
         data: { state: ChatState.AWAITING_PRAYER_REQUEST },
@@ -393,9 +615,9 @@ async function handleMainMenuChoice(
         text: "Pode escrever seu pedido de oração. Vamos rezar por essa intenção. 🙏",
       };
 
-    case "3":
-    case "4": {
-      const type = choice.trim() === "3" ? "DIZIMO" : "OFERTA";
+    case "dizimo":
+    case "oferta": {
+      const type = resolved === "dizimo" ? "DIZIMO" : "OFERTA";
       await prisma.chatSession.update({
         where: { id: sessionId },
         data: {
@@ -408,14 +630,22 @@ async function handleMainMenuChoice(
       };
     }
 
-    case "5":
+    case "historico":
       return { text: await handleContributionHistory(member.id) };
 
-    case "6":
+    case "campanha":
+      return handleCampaignSelection(sessionId, eligibleCampaigns);
+
+    case "secretaria":
       return { text: await handlePastoralContact(member.institutionId) };
 
     default:
-      return menuReply("Não entendi sua resposta.", member.name);
+      return menuReply(
+        "Não entendi sua resposta.",
+        member.name,
+        options,
+        eligibleCampaigns.length > 0,
+      );
   }
 }
 
@@ -424,6 +654,8 @@ async function handlePrayerRequest(
   sessionId: string,
   phone: string,
   body: string,
+  options: MenuOption[],
+  hasCampaign: boolean,
 ): Promise<BotReply> {
   await prisma.prayerRequest.create({
     data: {
@@ -442,6 +674,8 @@ async function handlePrayerRequest(
   return menuReply(
     "Recebemos seu pedido de oração. 🙏 Nossa comunidade vai rezar por essa intenção.",
     member.name,
+    options,
+    hasCampaign,
   );
 }
 
@@ -450,15 +684,11 @@ async function handleContributionAmount(
   sessionId: string,
   contextRaw: string | null,
   body: string,
+  options: MenuOption[],
+  hasCampaign: boolean,
 ): Promise<BotReply> {
-  const normalized = body
-    .trim()
-    .replace(/[^\d.,]/g, "")
-    .replace(/\.(?=\d{3}(?:\D|$))/g, "")
-    .replace(",", ".");
-  const amount = Number(normalized);
-
-  if (!amount || amount <= 0) {
+  const amount = parseAmount(body);
+  if (!amount) {
     return {
       text: "Valor inválido. Responda só com o número (ex.: 50 ou 50,00).",
     };
@@ -493,6 +723,8 @@ async function handleContributionAmount(
   return menuReply(
     `Combinado! Registramos sua contribuição de ${formatBRL(amount)} (${CONTRIBUTION_TYPE_LABELS[type]}).\n\n${pixLine}\n\nAssim que o pagamento for confirmado, você recebe a confirmação por aqui. Obrigado pela generosidade! 💙`,
     member.name,
+    options,
+    hasCampaign,
   );
 }
 
@@ -530,6 +762,9 @@ export async function handleIncomingWhatsAppMessage(
     });
   }
 
+  const { options, eligibleCampaigns } = await buildMenu(member.institutionId);
+  const hasCampaign = eligibleCampaigns.length > 0;
+
   if (isFirstContact || body === "0" || body.toLowerCase() === "menu") {
     await prisma.chatSession.update({
       where: { id: session.id },
@@ -549,17 +784,48 @@ export async function handleIncomingWhatsAppMessage(
       welcomeText = template?.body ?? `Seja muito bem-vindo(a), ${member.name}!`;
     }
 
-    return menuReply(welcomeText, member.name);
+    return menuReply(welcomeText, member.name, options, hasCampaign);
   }
 
   switch (session.state) {
     case ChatState.AWAITING_PRAYER_REQUEST:
-      return handlePrayerRequest(member, session.id, digits, body);
+      return handlePrayerRequest(
+        member,
+        session.id,
+        digits,
+        body,
+        options,
+        hasCampaign,
+      );
     case ChatState.AWAITING_CONTRIBUTION_AMOUNT:
-      return handleContributionAmount(member, session.id, session.context, body);
+      return handleContributionAmount(
+        member,
+        session.id,
+        session.context,
+        body,
+        options,
+        hasCampaign,
+      );
+    case ChatState.AWAITING_CAMPAIGN_CHOICE:
+      return handleCampaignChoice(session.id, session.context, body);
+    case ChatState.AWAITING_CAMPAIGN_AMOUNT:
+      return handleCampaignAmount(
+        member,
+        session.id,
+        session.context,
+        body,
+        options,
+        hasCampaign,
+      );
     case ChatState.MAIN_MENU:
     default:
-      return handleMainMenuChoice(member, session.id, body);
+      return handleMainMenuChoice(
+        member,
+        session.id,
+        body,
+        options,
+        eligibleCampaigns,
+      );
   }
 }
 

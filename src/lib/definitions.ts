@@ -296,6 +296,7 @@ export const CampaignFormSchema = z
     description: z.string().trim().optional(),
     endsAt: z.string().trim().optional(),
     pixKey: z.string().trim().optional(),
+    availableInChatbot: z.coerce.boolean().optional(),
     goalAmount: z.coerce
       .number({ error: "Informe uma meta válida." })
       .positive({ error: "A meta deve ser maior que zero." })
@@ -345,6 +346,7 @@ export type CampaignFormState =
         goalAmount?: string[];
         endsAt?: string[];
         pixKey?: string[];
+        availableInChatbot?: string[];
         raffleTotalNumbers?: string[];
         raffleNumberPrice?: string[];
         flavors?: string[];
@@ -359,6 +361,7 @@ export const CampaignEditFormSchema = z.object({
   description: z.string().trim().optional(),
   endsAt: z.string().trim().optional(),
   pixKey: z.string().trim().optional(),
+  availableInChatbot: z.coerce.boolean().optional(),
   goalAmount: z.coerce
     .number({ error: "Informe uma meta válida." })
     .positive({ error: "A meta deve ser maior que zero." })

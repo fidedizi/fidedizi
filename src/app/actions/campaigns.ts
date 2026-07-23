@@ -63,6 +63,7 @@ export async function createCampaign(
     description: formData.get("description"),
     endsAt: formData.get("endsAt"),
     pixKey: formData.get("pixKey"),
+    availableInChatbot: formData.get("availableInChatbot"),
     goalAmount: formData.get("goalAmount") || undefined,
     raffleTotalNumbers: formData.get("raffleTotalNumbers") || undefined,
     raffleNumberPrice: formData.get("raffleNumberPrice") || undefined,
@@ -78,6 +79,7 @@ export async function createCampaign(
     description,
     endsAt,
     pixKey,
+    availableInChatbot,
     goalAmount,
     raffleTotalNumbers,
     raffleNumberPrice,
@@ -100,6 +102,7 @@ export async function createCampaign(
       description: description || null,
       endsAt: endsAt ? new Date(endsAt) : null,
       pixKey: pixKey || null,
+      availableInChatbot: type === "PADRAO" ? (availableInChatbot ?? false) : false,
       goalAmount: type === "PADRAO" ? goalAmount : null,
       raffleTotalNumbers: type === "RIFA" ? raffleTotalNumbers : null,
       raffleNumberPrice: type === "RIFA" ? raffleNumberPrice : null,
@@ -134,6 +137,7 @@ export async function updateCampaign(
     description: formData.get("description"),
     endsAt: formData.get("endsAt"),
     pixKey: formData.get("pixKey"),
+    availableInChatbot: formData.get("availableInChatbot"),
     goalAmount: formData.get("goalAmount") || undefined,
   });
 
@@ -141,7 +145,8 @@ export async function updateCampaign(
     return { errors: validatedFields.error.flatten().fieldErrors };
   }
 
-  const { title, description, endsAt, pixKey, goalAmount } = validatedFields.data;
+  const { title, description, endsAt, pixKey, availableInChatbot, goalAmount } =
+    validatedFields.data;
 
   if (campaign.type === "PADRAO" && !(goalAmount && goalAmount > 0)) {
     return { errors: { goalAmount: ["Informe uma meta válida."] } };
@@ -154,7 +159,9 @@ export async function updateCampaign(
       description: description || null,
       endsAt: endsAt ? new Date(endsAt) : null,
       pixKey: pixKey || null,
-      ...(campaign.type === "PADRAO" ? { goalAmount } : {}),
+      ...(campaign.type === "PADRAO"
+        ? { goalAmount, availableInChatbot: availableInChatbot ?? false }
+        : {}),
     },
   });
 
