@@ -102,7 +102,7 @@ export async function createCampaign(
       description: description || null,
       endsAt: endsAt ? new Date(endsAt) : null,
       pixKey: pixKey || null,
-      availableInChatbot: type === "PADRAO" ? (availableInChatbot ?? false) : false,
+      availableInChatbot: availableInChatbot ?? false,
       goalAmount: type === "PADRAO" ? goalAmount : null,
       raffleTotalNumbers: type === "RIFA" ? raffleTotalNumbers : null,
       raffleNumberPrice: type === "RIFA" ? raffleNumberPrice : null,
@@ -159,9 +159,8 @@ export async function updateCampaign(
       description: description || null,
       endsAt: endsAt ? new Date(endsAt) : null,
       pixKey: pixKey || null,
-      ...(campaign.type === "PADRAO"
-        ? { goalAmount, availableInChatbot: availableInChatbot ?? false }
-        : {}),
+      availableInChatbot: availableInChatbot ?? false,
+      ...(campaign.type === "PADRAO" ? { goalAmount } : {}),
     },
   });
 

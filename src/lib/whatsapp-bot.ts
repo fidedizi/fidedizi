@@ -49,16 +49,109 @@ function phoneDigitVariants(rawPhone: string): string[] {
   return [digits];
 }
 
-async function getEligibleChatbotCampaigns(institutionId: string) {
-  return prisma.campaign.findMany({
+type PizzaFlavorOption = {
+  id: string;
+  name: string;
+  price: number;
+  remaining: number;
+};
+
+type EligibleCampaign =
+  | { id: string; title: string; type: "PADRAO"; pixKey: string | null }
+  | {
+      id: string;
+      title: string;
+      type: "RIFA";
+      pixKey: string | null;
+      unitPrice: number;
+      remaining: number;
+    }
+  | {
+      id: string;
+      title: string;
+      type: "PIZZA";
+      pixKey: string | null;
+      flavors: PizzaFlavorOption[];
+    };
+
+// Busca as campanhas liberadas para o chatbot desta instituição, já
+// filtrando as que não têm o que vender no momento (rifa esgotada, pizza
+// sem sabor com estoque, etc.) — essas não aparecem no menu.
+async function getEligibleChatbotCampaigns(
+  institutionId: string,
+): Promise<EligibleCampaign[]> {
+  const campaigns = await prisma.campaign.findMany({
     where: {
       institutionId,
-      type: "PADRAO",
       availableInChatbot: true,
       OR: [{ endsAt: null }, { endsAt: { gte: new Date() } }],
     },
+    include: {
+      _count: { select: { raffleNumbers: true } },
+      pizzaFlavors: true,
+    },
     orderBy: { createdAt: "desc" },
   });
+
+  const eligible: EligibleCampaign[] = [];
+
+  for (const campaign of campaigns) {
+    if (campaign.type === "PADRAO") {
+      eligible.push({
+        id: campaign.id,
+        title: campaign.title,
+        type: "PADRAO",
+        pixKey: campaign.pixKey,
+      });
+      continue;
+    }
+
+    if (campaign.type === "RIFA") {
+      if (!campaign.raffleTotalNumbers || !campaign.raffleNumberPrice) continue;
+      const remaining =
+        campaign.raffleTotalNumbers - campaign._count.raffleNumbers;
+      if (remaining <= 0) continue;
+      eligible.push({
+        id: campaign.id,
+        title: campaign.title,
+        type: "RIFA",
+        pixKey: campaign.pixKey,
+        unitPrice: Number(campaign.raffleNumberPrice),
+        remaining,
+      });
+      continue;
+    }
+
+    if (campaign.type === "PIZZA") {
+      if (campaign.pizzaFlavors.length === 0) continue;
+      const soldByFlavor = await prisma.pizzaOrderItem.groupBy({
+        by: ["flavorId"],
+        where: { flavorId: { in: campaign.pizzaFlavors.map((f) => f.id) } },
+        _sum: { quantity: true },
+      });
+      const soldMap = new Map(
+        soldByFlavor.map((s) => [s.flavorId, s._sum.quantity ?? 0]),
+      );
+      const flavors = campaign.pizzaFlavors
+        .map((flavor) => ({
+          id: flavor.id,
+          name: flavor.name,
+          price: Number(flavor.price),
+          remaining: flavor.stockQuantity - (soldMap.get(flavor.id) ?? 0),
+        }))
+        .filter((flavor) => flavor.remaining > 0);
+      if (flavors.length === 0) continue;
+      eligible.push({
+        id: campaign.id,
+        title: campaign.title,
+        type: "PIZZA",
+        pixKey: campaign.pixKey,
+        flavors,
+      });
+    }
+  }
+
+  return eligible;
 }
 
 // Monta a lista de opções do menu para esta instituição — "Campanha" só
@@ -443,18 +536,11 @@ async function handlePastoralContact(institutionId: string) {
   return `Fale com a secretaria:\n\n${lines.join("\n")}`;
 }
 
-async function handleCampaignSelection(
+async function startCampaignFlow(
   sessionId: string,
-  eligibleCampaigns: { id: string; title: string }[],
+  campaign: EligibleCampaign,
 ): Promise<BotReply> {
-  if (eligibleCampaigns.length === 0) {
-    return {
-      text: "No momento não há nenhuma campanha disponível para contribuição pelo WhatsApp.",
-    };
-  }
-
-  if (eligibleCampaigns.length === 1) {
-    const campaign = eligibleCampaigns[0];
+  if (campaign.type === "PADRAO") {
     await prisma.chatSession.update({
       where: { id: sessionId },
       data: {
@@ -470,6 +556,59 @@ async function handleCampaignSelection(
     };
   }
 
+  if (campaign.type === "RIFA") {
+    await prisma.chatSession.update({
+      where: { id: sessionId },
+      data: {
+        state: ChatState.AWAITING_RAFFLE_QUANTITY,
+        context: JSON.stringify({
+          campaignId: campaign.id,
+          campaignTitle: campaign.title,
+        }),
+      },
+    });
+    return {
+      text: `Restam ${campaign.remaining} número(s) da rifa "${campaign.title}" (${formatBRL(campaign.unitPrice)} cada). Quantos números você deseja comprar?`,
+    };
+  }
+
+  const list = campaign.flavors
+    .map(
+      (flavor, index) =>
+        `${index + 1}️⃣ ${flavor.name} — ${formatBRL(flavor.price)} (${flavor.remaining} disponível(is))`,
+    )
+    .join("\n");
+
+  await prisma.chatSession.update({
+    where: { id: sessionId },
+    data: {
+      state: ChatState.AWAITING_PIZZA_FLAVOR,
+      context: JSON.stringify({
+        campaignId: campaign.id,
+        campaignTitle: campaign.title,
+        flavorCandidates: campaign.flavors,
+      }),
+    },
+  });
+  return {
+    text: `Sabores disponíveis da campanha "${campaign.title}":\n\n${list}\n\nResponda com o número do sabor.`,
+  };
+}
+
+async function handleCampaignSelection(
+  sessionId: string,
+  eligibleCampaigns: EligibleCampaign[],
+): Promise<BotReply> {
+  if (eligibleCampaigns.length === 0) {
+    return {
+      text: "No momento não há nenhuma campanha disponível para contribuição pelo WhatsApp.",
+    };
+  }
+
+  if (eligibleCampaigns.length === 1) {
+    return startCampaignFlow(sessionId, eligibleCampaigns[0]);
+  }
+
   const list = eligibleCampaigns
     .map((campaign, index) => `${index + 1}️⃣ ${campaign.title}`)
     .join("\n");
@@ -478,12 +617,7 @@ async function handleCampaignSelection(
     where: { id: sessionId },
     data: {
       state: ChatState.AWAITING_CAMPAIGN_CHOICE,
-      context: JSON.stringify({
-        campaignCandidates: eligibleCampaigns.map((campaign) => ({
-          id: campaign.id,
-          title: campaign.title,
-        })),
-      }),
+      context: JSON.stringify({ campaignCandidates: eligibleCampaigns }),
     },
   });
   return {
@@ -496,8 +630,9 @@ async function handleCampaignChoice(
   contextRaw: string | null,
   body: string,
 ): Promise<BotReply> {
-  const context: { campaignCandidates?: { id: string; title: string }[] } =
-    contextRaw ? JSON.parse(contextRaw) : {};
+  const context: { campaignCandidates?: EligibleCampaign[] } = contextRaw
+    ? JSON.parse(contextRaw)
+    : {};
   const candidates = context.campaignCandidates ?? [];
   const chosen = candidates[Number(body.trim()) - 1];
 
@@ -505,19 +640,7 @@ async function handleCampaignChoice(
     return { text: "Responda com o número de uma das campanhas listadas." };
   }
 
-  await prisma.chatSession.update({
-    where: { id: sessionId },
-    data: {
-      state: ChatState.AWAITING_CAMPAIGN_AMOUNT,
-      context: JSON.stringify({
-        campaignId: chosen.id,
-        campaignTitle: chosen.title,
-      }),
-    },
-  });
-  return {
-    text: `Quanto você deseja contribuir para a campanha "${chosen.title}"? Responda só com o número (ex.: 50 ou 50,00).`,
-  };
+  return startCampaignFlow(sessionId, chosen);
 }
 
 async function handleCampaignAmount(
@@ -593,12 +716,278 @@ async function handleCampaignAmount(
   );
 }
 
+async function handleRaffleQuantity(
+  member: NonNullable<MemberWithInstitution>,
+  sessionId: string,
+  contextRaw: string | null,
+  body: string,
+  options: MenuOption[],
+  hasCampaign: boolean,
+): Promise<BotReply> {
+  const context: { campaignId?: string; campaignTitle?: string } = contextRaw
+    ? JSON.parse(contextRaw)
+    : {};
+
+  const quantity = Number(body.trim().replace(/\D/g, ""));
+  if (!quantity) {
+    return {
+      text: "Quantidade inválida. Responda só com o número de números que deseja comprar (ex.: 2).",
+    };
+  }
+
+  const campaign = context.campaignId
+    ? await prisma.campaign.findUnique({
+        where: { id: context.campaignId },
+        include: { _count: { select: { raffleNumbers: true } } },
+      })
+    : null;
+
+  if (!campaign || !campaign.raffleTotalNumbers || !campaign.raffleNumberPrice) {
+    await prisma.chatSession.update({
+      where: { id: sessionId },
+      data: { state: ChatState.MAIN_MENU, context: null },
+    });
+    return menuReply(
+      "Essa rifa não está mais disponível.",
+      member.name,
+      options,
+      hasCampaign,
+    );
+  }
+
+  const soldCount = campaign._count.raffleNumbers;
+  const remaining = campaign.raffleTotalNumbers - soldCount;
+
+  if (quantity > remaining) {
+    return {
+      text: `Só restam ${remaining} número(s) disponível(is) para esta rifa. Responda com uma quantidade menor.`,
+    };
+  }
+
+  const unitPrice = Number(campaign.raffleNumberPrice);
+  const totalAmount = quantity * unitPrice;
+
+  const { feeAmount, netAmount } = await calculateSplit(
+    totalAmount,
+    member.institutionId,
+  );
+
+  // Usa o maior número já atribuído (não a contagem) para gerar os próximos,
+  // já que a contagem pode ficar defasada do maior número em uso se algum
+  // número for cancelado/excluído no meio da faixa.
+  const maxNumberAgg = await prisma.raffleNumber.aggregate({
+    where: { campaignId: campaign.id },
+    _max: { number: true },
+  });
+  const nextStart = maxNumberAgg._max.number ?? 0;
+  const numbers = Array.from({ length: quantity }, (_, i) => nextStart + i + 1);
+
+  // Contribuição e números da rifa precisam nascer juntos: se a atribuição
+  // dos números falhar (ex.: número já ocupado), a contribuição não pode
+  // ficar órfã sem número nenhum vinculado.
+  await prisma.$transaction(async (tx) => {
+    const contribution = await tx.contribution.create({
+      data: {
+        institutionId: member.institutionId,
+        memberId: member.id,
+        campaignId: campaign.id,
+        type: ContributionType.CAMPANHA,
+        method: ContributionMethod.PIX,
+        status: ContributionStatus.PENDING,
+        grossAmount: totalAmount,
+        feeAmount,
+        netAmount,
+        buyerName: member.name,
+        buyerPhone: member.whatsapp,
+      },
+    });
+
+    for (const number of numbers) {
+      await tx.raffleNumber.create({
+        data: {
+          campaignId: campaign.id,
+          number,
+          contributionId: contribution.id,
+          buyerName: member.name,
+          buyerPhone: member.whatsapp,
+        },
+      });
+    }
+  });
+
+  await prisma.chatSession.update({
+    where: { id: sessionId },
+    data: { state: ChatState.MAIN_MENU, context: null },
+  });
+
+  const pixKey = campaign.pixKey ?? member.institution.pixKey;
+  const pixLine = pixKey
+    ? `Chave Pix para pagamento: \`${pixKey}\``
+    : "Nossa secretaria vai entrar em contato para combinar o pagamento.";
+
+  return menuReply(
+    `Combinado! Reservamos ${quantity} número(s) da rifa "${campaign.title}": ${numbers.join(", ")}.\n\nValor total: ${formatBRL(totalAmount)}.\n\n${pixLine}\n\nAssim que o pagamento for confirmado, sua compra fica garantida. Obrigado pela generosidade! 💙`,
+    member.name,
+    options,
+    hasCampaign,
+  );
+}
+
+async function handlePizzaFlavorChoice(
+  sessionId: string,
+  contextRaw: string | null,
+  body: string,
+): Promise<BotReply> {
+  const context: {
+    campaignId?: string;
+    campaignTitle?: string;
+    flavorCandidates?: PizzaFlavorOption[];
+  } = contextRaw ? JSON.parse(contextRaw) : {};
+
+  const candidates = context.flavorCandidates ?? [];
+  const chosen = candidates[Number(body.trim()) - 1];
+
+  if (!chosen) {
+    return { text: "Responda com o número de um dos sabores listados." };
+  }
+
+  await prisma.chatSession.update({
+    where: { id: sessionId },
+    data: {
+      state: ChatState.AWAITING_PIZZA_QUANTITY,
+      context: JSON.stringify({
+        campaignId: context.campaignId,
+        campaignTitle: context.campaignTitle,
+        flavorId: chosen.id,
+        flavorName: chosen.name,
+      }),
+    },
+  });
+
+  return {
+    text: `Quantas pizzas de ${chosen.name} você deseja? (restam ${chosen.remaining})`,
+  };
+}
+
+async function handlePizzaQuantity(
+  member: NonNullable<MemberWithInstitution>,
+  sessionId: string,
+  contextRaw: string | null,
+  body: string,
+  options: MenuOption[],
+  hasCampaign: boolean,
+): Promise<BotReply> {
+  const context: {
+    campaignId?: string;
+    campaignTitle?: string;
+    flavorId?: string;
+    flavorName?: string;
+  } = contextRaw ? JSON.parse(contextRaw) : {};
+
+  const quantity = Number(body.trim().replace(/\D/g, ""));
+  if (!quantity) {
+    return {
+      text: "Quantidade inválida. Responda só com o número de pizzas que deseja (ex.: 2).",
+    };
+  }
+
+  const [flavor, campaign] = await Promise.all([
+    context.flavorId
+      ? prisma.pizzaFlavor.findUnique({ where: { id: context.flavorId } })
+      : null,
+    context.campaignId
+      ? prisma.campaign.findUnique({ where: { id: context.campaignId } })
+      : null,
+  ]);
+
+  if (!flavor || !campaign) {
+    await prisma.chatSession.update({
+      where: { id: sessionId },
+      data: { state: ChatState.MAIN_MENU, context: null },
+    });
+    return menuReply(
+      "Esse sabor não está mais disponível.",
+      member.name,
+      options,
+      hasCampaign,
+    );
+  }
+
+  const soldAgg = await prisma.pizzaOrderItem.aggregate({
+    where: { flavorId: flavor.id },
+    _sum: { quantity: true },
+  });
+  const sold = soldAgg._sum.quantity ?? 0;
+  const remaining = flavor.stockQuantity - sold;
+
+  if (quantity > remaining) {
+    return {
+      text: `Só restam ${remaining} unidade(s) de ${flavor.name}. Responda com uma quantidade menor.`,
+    };
+  }
+
+  const unitPrice = Number(flavor.price);
+  const totalAmount = quantity * unitPrice;
+
+  const { feeAmount, netAmount } = await calculateSplit(
+    totalAmount,
+    member.institutionId,
+  );
+
+  // Contribuição e item do pedido precisam nascer juntos: se um dos dois
+  // falhar, o outro não pode ficar órfão.
+  await prisma.$transaction(async (tx) => {
+    const contribution = await tx.contribution.create({
+      data: {
+        institutionId: member.institutionId,
+        memberId: member.id,
+        campaignId: campaign.id,
+        type: ContributionType.CAMPANHA,
+        method: ContributionMethod.PIX,
+        status: ContributionStatus.PENDING,
+        grossAmount: totalAmount,
+        feeAmount,
+        netAmount,
+        buyerName: member.name,
+        buyerPhone: member.whatsapp,
+      },
+    });
+
+    await tx.pizzaOrderItem.create({
+      data: {
+        flavorId: flavor.id,
+        contributionId: contribution.id,
+        quantity,
+        buyerName: member.name,
+        buyerPhone: member.whatsapp,
+      },
+    });
+  });
+
+  await prisma.chatSession.update({
+    where: { id: sessionId },
+    data: { state: ChatState.MAIN_MENU, context: null },
+  });
+
+  const pixKey = campaign.pixKey ?? member.institution.pixKey;
+  const pixLine = pixKey
+    ? `Chave Pix para pagamento: \`${pixKey}\``
+    : "Nossa secretaria vai entrar em contato para combinar o pagamento.";
+
+  return menuReply(
+    `Combinado! Registramos seu pedido de ${quantity}x ${flavor.name} da campanha "${campaign.title}".\n\nValor total: ${formatBRL(totalAmount)}.\n\n${pixLine}\n\nAssim que o pagamento for confirmado, você recebe a confirmação por aqui. Obrigado pela generosidade! 💙`,
+    member.name,
+    options,
+    hasCampaign,
+  );
+}
+
 async function handleMainMenuChoice(
   member: NonNullable<MemberWithInstitution>,
   sessionId: string,
   choice: string,
   options: MenuOption[],
-  eligibleCampaigns: { id: string; title: string }[],
+  eligibleCampaigns: EligibleCampaign[],
 ): Promise<BotReply> {
   const resolved = resolveMenuChoice(choice, options);
 
@@ -810,6 +1199,26 @@ export async function handleIncomingWhatsAppMessage(
       return handleCampaignChoice(session.id, session.context, body);
     case ChatState.AWAITING_CAMPAIGN_AMOUNT:
       return handleCampaignAmount(
+        member,
+        session.id,
+        session.context,
+        body,
+        options,
+        hasCampaign,
+      );
+    case ChatState.AWAITING_RAFFLE_QUANTITY:
+      return handleRaffleQuantity(
+        member,
+        session.id,
+        session.context,
+        body,
+        options,
+        hasCampaign,
+      );
+    case ChatState.AWAITING_PIZZA_FLAVOR:
+      return handlePizzaFlavorChoice(session.id, session.context, body);
+    case ChatState.AWAITING_PIZZA_QUANTITY:
+      return handlePizzaQuantity(
         member,
         session.id,
         session.context,

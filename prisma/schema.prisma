@@ -322,9 +322,10 @@ model Campaign {
   // paróquia.
   pixKey String?
 
-  // Libera a opção "Campanha" no menu do chatbot de WhatsApp. Só se aplica a
-  // campanhas do tipo PADRAO (contribuição livre por valor) — Rifa e Pizza
-  // continuam vendidas só pelo painel.
+  // Libera a opção "Campanha" no menu do chatbot de WhatsApp para qualquer
+  // tipo de campanha. PADRAO pede o valor livre; RIFA pede a quantidade de
+  // números (respeitando o estoque); PIZZA pede sabor e quantidade
+  // (respeitando o estoque de cada sabor).
   availableInChatbot Boolean @default(false)
 
   contributions Contribution[]
@@ -520,6 +521,9 @@ enum ChatState {
   AWAITING_REGISTRATION_INSTITUTION_CHOICE
   AWAITING_CAMPAIGN_CHOICE
   AWAITING_CAMPAIGN_AMOUNT
+  AWAITING_RAFFLE_QUANTITY
+  AWAITING_PIZZA_FLAVOR
+  AWAITING_PIZZA_QUANTITY
 }
 
 // Uma sessão por número de telefone — guarda em que ponto da conversa o fiel

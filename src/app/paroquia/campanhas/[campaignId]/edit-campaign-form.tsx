@@ -109,19 +109,17 @@ export function EditCampaignForm({ campaign }: { campaign: CampaignData }) {
         </div>
       )}
 
-      {campaign.type === "PADRAO" && (
-        <div className="flex items-end">
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              name="availableInChatbot"
-              value="true"
-              defaultChecked={campaign.availableInChatbot}
-            />
-            Disponibilizar no chatbot do WhatsApp
-          </label>
-        </div>
-      )}
+      <div className="flex items-end">
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            name="availableInChatbot"
+            value="true"
+            defaultChecked={campaign.availableInChatbot}
+          />
+          Disponibilizar no chatbot do WhatsApp
+        </label>
+      </div>
 
       <div className="flex flex-col gap-1">
         <label htmlFor="endsAt" className="text-sm font-medium text-slate-700">
