@@ -68,6 +68,7 @@ export default async function FinanceiroPage() {
             <tr>
               <th className="px-4 py-2 font-medium">Data</th>
               <th className="px-4 py-2 font-medium">Tipo</th>
+              <th className="px-4 py-2 font-medium">Campanha</th>
               <th className="px-4 py-2 font-medium">Método</th>
               <th className="px-4 py-2 font-medium">Status</th>
               <th className="px-4 py-2 font-medium">Valor Bruto</th>
@@ -81,7 +82,7 @@ export default async function FinanceiroPage() {
             {contributions.length === 0 && (
               <tr>
                 <td
-                  colSpan={9}
+                  colSpan={10}
                   className="px-4 py-6 text-center text-slate-400"
                 >
                   Nenhum lançamento registrado ainda.
@@ -103,6 +104,7 @@ export default async function FinanceiroPage() {
                     {c.createdAt.toLocaleDateString("pt-BR")}
                   </td>
                   <td className="px-4 py-2">{TYPE_LABELS[c.type]}</td>
+                  <td className="px-4 py-2">{c.campaign?.title ?? "—"}</td>
                   <td className="px-4 py-2">{METHOD_LABELS[c.method]}</td>
                   <td className="px-4 py-2">
                     <span

@@ -795,11 +795,9 @@ async function handleCampaignAmount(
     ? `Chave Pix para pagamento: \`${pixKey}\``
     : "Nossa secretaria vai entrar em contato para combinar o pagamento.";
 
-  return menuReply(
-    `Combinado! Registramos sua contribuição de ${formatBRL(amount)} para a campanha "${campaign.title}".\n\n${pixLine}\n\nAssim que o pagamento for confirmado, você recebe a confirmação por aqui. Obrigado pela generosidade! 💙`,
-    member.name,
-    options,
-  );
+  return {
+    text: `Combinado! Registramos sua contribuição de ${formatBRL(amount)} para a campanha "${campaign.title}".\n\n${pixLine}\n\nAssim que o pagamento for confirmado, você recebe a confirmação por aqui. Obrigado pela generosidade! 💙\n\nDigite *0* a qualquer momento para ver o menu.`,
+  };
 }
 
 async function handleRaffleQuantity(
@@ -905,11 +903,9 @@ async function handleRaffleQuantity(
     ? `Chave Pix para pagamento: \`${pixKey}\``
     : "Nossa secretaria vai entrar em contato para combinar o pagamento.";
 
-  return menuReply(
-    `Combinado! Reservamos ${quantity} número(s) da rifa "${campaign.title}": ${numbers.join(", ")}.\n\nValor total: ${formatBRL(totalAmount)}.\n\n${pixLine}\n\nAssim que o pagamento for confirmado, sua compra fica garantida. Obrigado pela generosidade! 💙`,
-    member.name,
-    options,
-  );
+  return {
+    text: `Combinado! Reservamos ${quantity} número(s) da rifa "${campaign.title}": ${numbers.join(", ")}.\n\nValor total: ${formatBRL(totalAmount)}.\n\n${pixLine}\n\nAssim que o pagamento for confirmado, sua compra fica garantida. Obrigado pela generosidade! 💙\n\nDigite *0* a qualquer momento para ver o menu.`,
+  };
 }
 
 async function handlePizzaFlavorChoice(
@@ -1047,11 +1043,9 @@ async function handlePizzaQuantity(
     ? `Chave Pix para pagamento: \`${pixKey}\``
     : "Nossa secretaria vai entrar em contato para combinar o pagamento.";
 
-  return menuReply(
-    `Combinado! Registramos seu pedido de ${quantity}x ${flavor.name} da campanha "${campaign.title}".\n\nValor total: ${formatBRL(totalAmount)}.\n\n${pixLine}\n\nAssim que o pagamento for confirmado, você recebe a confirmação por aqui. Obrigado pela generosidade! 💙`,
-    member.name,
-    options,
-  );
+  return {
+    text: `Combinado! Registramos seu pedido de ${quantity}x ${flavor.name} da campanha "${campaign.title}".\n\nValor total: ${formatBRL(totalAmount)}.\n\n${pixLine}\n\nAssim que o pagamento for confirmado, você recebe a confirmação por aqui. Obrigado pela generosidade! 💙\n\nDigite *0* a qualquer momento para ver o menu.`,
+  };
 }
 
 async function startEventFlow(
@@ -1288,11 +1282,9 @@ async function handleEventChildCount(
     .filter(Boolean)
     .join(" e ");
 
-  return menuReply(
-    `Combinado! Reservamos ${totalRequested} ingresso(s) para "${event.title}" (${itemsSummary}).\n\nValor total: ${formatBRL(totalAmount)}.\n\n${pixLine}\n\nSeus ingressos ficam liberados para entrada assim que a secretaria confirmar o pagamento. Obrigado! 💙`,
-    member.name,
-    options,
-  );
+  return {
+    text: `Combinado! Reservamos ${totalRequested} ingresso(s) para "${event.title}" (${itemsSummary}).\n\nValor total: ${formatBRL(totalAmount)}.\n\n${pixLine}\n\nSeus ingressos ficam liberados para entrada assim que a secretaria confirmar o pagamento. Obrigado! 💙\n\nDigite *0* a qualquer momento para ver o menu.`,
+  };
 }
 
 async function handleMainMenuChoice(
@@ -1355,7 +1347,6 @@ async function handlePrayerRequest(
   sessionId: string,
   phone: string,
   body: string,
-  options: MenuOption[],
 ): Promise<BotReply> {
   await prisma.prayerRequest.create({
     data: {
@@ -1371,11 +1362,9 @@ async function handlePrayerRequest(
     data: { state: ChatState.MAIN_MENU },
   });
 
-  return menuReply(
-    "Recebemos seu pedido de oração. 🙏 Nossa comunidade vai rezar por essa intenção.",
-    member.name,
-    options,
-  );
+  return {
+    text: "Recebemos seu pedido de oração. 🙏 Nossa comunidade vai rezar por essa intenção.\n\nDigite *0* a qualquer momento para ver o menu.",
+  };
 }
 
 async function handleContributionAmount(
@@ -1383,7 +1372,6 @@ async function handleContributionAmount(
   sessionId: string,
   contextRaw: string | null,
   body: string,
-  options: MenuOption[],
 ): Promise<BotReply> {
   const amount = parseAmount(body);
   if (!amount) {
@@ -1418,11 +1406,9 @@ async function handleContributionAmount(
     ? `Chave Pix para pagamento: \`${member.institution.pixKey}\``
     : "Nossa secretaria vai entrar em contato para combinar o pagamento.";
 
-  return menuReply(
-    `Combinado! Registramos sua contribuição de ${formatBRL(amount)} (${CONTRIBUTION_TYPE_LABELS[type]}).\n\n${pixLine}\n\nAssim que o pagamento for confirmado, você recebe a confirmação por aqui. Obrigado pela generosidade! 💙`,
-    member.name,
-    options,
-  );
+  return {
+    text: `Combinado! Registramos sua contribuição de ${formatBRL(amount)} (${CONTRIBUTION_TYPE_LABELS[type]}).\n\n${pixLine}\n\nAssim que o pagamento for confirmado, você recebe a confirmação por aqui. Obrigado pela generosidade! 💙\n\nDigite *0* a qualquer momento para ver o menu.`,
+  };
 }
 
 export async function handleIncomingWhatsAppMessage(
@@ -1487,14 +1473,13 @@ export async function handleIncomingWhatsAppMessage(
 
   switch (session.state) {
     case ChatState.AWAITING_PRAYER_REQUEST:
-      return handlePrayerRequest(member, session.id, digits, body, options);
+      return handlePrayerRequest(member, session.id, digits, body);
     case ChatState.AWAITING_CONTRIBUTION_AMOUNT:
       return handleContributionAmount(
         member,
         session.id,
         session.context,
         body,
-        options,
       );
     case ChatState.AWAITING_CAMPAIGN_CHOICE:
       return handleCampaignChoice(session.id, session.context, body);

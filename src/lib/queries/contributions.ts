@@ -8,6 +8,7 @@ export async function listRecentContributions(institutionId: string, take = 20) 
     take,
     include: {
       member: { select: { name: true, whatsapp: true } },
+      campaign: { select: { title: true } },
     },
   });
 }
