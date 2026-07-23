@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { requireParoquiaContext } from "@/lib/selected-institution";
 import { CampaignType } from "@/generated/prisma/client";
@@ -168,7 +169,7 @@ export async function updateCampaign(
   revalidatePath(`/paroquia/campanhas/${campaignId}`);
   revalidatePath("/paroquia/financeiro");
 
-  return { message: "Campanha atualizada com sucesso." };
+  redirect("/paroquia/campanhas");
 }
 
 export async function deleteCampaign(campaignId: string) {
