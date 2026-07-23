@@ -4,7 +4,7 @@ import {
   buildTwiml,
   type BotReply,
 } from "@/lib/whatsapp-bot";
-import { sendContentMessage } from "@/lib/whatsapp-sender";
+import { sendContentMessage, sendPlainTextMessage } from "@/lib/whatsapp-sender";
 
 // Webhook público (sem sessão) chamado diretamente pela Twilio a cada
 // mensagem de WhatsApp recebida. A autenticidade é garantida pela assinatura
@@ -47,7 +47,18 @@ export async function POST(request: Request) {
   }
 
   if (reply.content) {
+    // Quando a resposta tem texto E menu interativo, os dois viram mensagens
+    // separadas (TwiML só carrega uma). Manda o texto primeiro e aguarda,
+    // senão a chamada REST do menu (mais rápida) chega antes e a conversa
+    // fica com a ordem invertida — como se o bot tivesse respondido "não
+    // entendi" depois de já ter mostrado o menu.
+    if (reply.text) {
+      await sendPlainTextMessage(from, reply.text);
+    }
     await sendContentMessage(from, reply.content.contentSid, reply.content.variables);
+    return new Response(buildTwiml(), {
+      headers: { "Content-Type": "text/xml" },
+    });
   }
 
   return new Response(buildTwiml(reply.text), {

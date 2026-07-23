@@ -105,6 +105,28 @@ export async function sendContentMessage(
   }
 }
 
+// Usada só pelo chatbot, para a parte em texto de uma resposta que também
+// leva um menu interativo (content). Precisa ser aguardada ANTES de mandar o
+// content — como o número já vem exato da mensagem recebida, dispensa o
+// fallback de "nono dígito" e a espera de confirmação de entrega usados em
+// sendWhatsAppMessage, então é rápida o bastante para garantir a ordem certa.
+export async function sendPlainTextMessage(to: string, message: string) {
+  if (!client || !TWILIO_WHATSAPP_FROM) {
+    console.log(`[WhatsApp] Twilio não configurado — texto simulado para ${to}:\n${message}`);
+    return;
+  }
+
+  try {
+    await client.messages.create({
+      from: TWILIO_WHATSAPP_FROM,
+      to,
+      body: message,
+    });
+  } catch (error) {
+    console.error(`[WhatsApp] Falha ao enviar texto para ${to}:`, error);
+  }
+}
+
 export async function sendWhatsAppMessage(
   phone: string,
   message: string,
