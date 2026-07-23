@@ -58,6 +58,180 @@ async function findMemberByPhone(digits: string) {
   });
 }
 
+function parseBirthDate(text: string): Date | null {
+  const match = text.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return null;
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const isRealDate =
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day;
+  if (!isRealDate || date > new Date()) return null;
+
+  return date;
+}
+
+async function searchInstitutionsByName(query: string) {
+  return prisma.institution.findMany({
+    where: {
+      type: { in: ["PAROQUIA", "CAPELA", "COMUNIDADE"] },
+      name: { contains: query, mode: "insensitive" },
+    },
+    orderBy: { name: "asc" },
+    take: 8,
+  });
+}
+
+async function finishRegistration(
+  sessionId: string,
+  digits: string,
+  context: { name?: string; birthDate?: string },
+  institution: { id: string; name: string },
+) {
+  const name = context.name ?? "";
+  const birthDate = context.birthDate ? new Date(context.birthDate) : null;
+
+  const member = await prisma.member.create({
+    data: {
+      institutionId: institution.id,
+      name,
+      whatsapp: digits,
+      birthDate,
+    },
+  });
+
+  await prisma.chatSession.update({
+    where: { id: sessionId },
+    data: {
+      memberId: member.id,
+      institutionId: institution.id,
+      state: ChatState.MAIN_MENU,
+      context: null,
+    },
+  });
+
+  const template = await prisma.messageTemplate.findUnique({
+    where: {
+      institutionId_trigger: {
+        institutionId: institution.id,
+        trigger: MessageTrigger.WELCOME,
+      },
+    },
+  });
+  const defaultWelcome = `Seja muito bem-vindo(a), ${member.name}!`;
+
+  return `Cadastro realizado com sucesso! 🎉\n\n${template?.body ?? defaultWelcome}\n\n${mainMenuText(member.name)}`;
+}
+
+// Número desconhecido: em vez de só recusar, conduz um cadastro rápido
+// (nome, data de nascimento, paróquia/capela/comunidade) e já cria o fiel.
+async function handleUnregisteredContact(digits: string, body: string) {
+  const session = await prisma.chatSession.findUnique({
+    where: { phone: digits },
+  });
+
+  if (!session) {
+    await prisma.chatSession.create({
+      data: { phone: digits, state: ChatState.AWAITING_REGISTRATION_NAME },
+    });
+    return "Não encontramos seu cadastro. Vamos criar um agora! 😊\n\nQual é o seu nome completo?";
+  }
+
+  const context: {
+    name?: string;
+    birthDate?: string;
+    institutionCandidates?: { id: string; name: string }[];
+  } = session.context ? JSON.parse(session.context) : {};
+
+  switch (session.state) {
+    case ChatState.AWAITING_REGISTRATION_NAME: {
+      const name = body.trim();
+      if (name.length < 3) {
+        return "Por favor, informe seu nome completo.";
+      }
+      await prisma.chatSession.update({
+        where: { id: session.id },
+        data: {
+          state: ChatState.AWAITING_REGISTRATION_BIRTHDATE,
+          context: JSON.stringify({ ...context, name }),
+        },
+      });
+      return "Qual é a sua data de nascimento? (formato DD/MM/AAAA)";
+    }
+
+    case ChatState.AWAITING_REGISTRATION_BIRTHDATE: {
+      const birthDate = parseBirthDate(body);
+      if (!birthDate) {
+        return "Data inválida. Informe no formato DD/MM/AAAA (ex.: 15/03/1990).";
+      }
+      await prisma.chatSession.update({
+        where: { id: session.id },
+        data: {
+          state: ChatState.AWAITING_REGISTRATION_INSTITUTION,
+          context: JSON.stringify({
+            ...context,
+            birthDate: birthDate.toISOString(),
+          }),
+        },
+      });
+      return "De qual paróquia, capela ou comunidade você faz parte? Digite o nome (ou parte dele).";
+    }
+
+    case ChatState.AWAITING_REGISTRATION_INSTITUTION: {
+      const matches = await searchInstitutionsByName(body.trim());
+
+      if (matches.length === 0) {
+        return "Não encontramos nenhuma paróquia, capela ou comunidade com esse nome. Tente digitar de outra forma, ou entre em contato com a secretaria.";
+      }
+
+      if (matches.length === 1) {
+        return finishRegistration(session.id, digits, context, matches[0]);
+      }
+
+      const list = matches
+        .map((institution, index) => `${index + 1}️⃣ ${institution.name}`)
+        .join("\n");
+
+      await prisma.chatSession.update({
+        where: { id: session.id },
+        data: {
+          state: ChatState.AWAITING_REGISTRATION_INSTITUTION_CHOICE,
+          context: JSON.stringify({
+            ...context,
+            institutionCandidates: matches.map((institution) => ({
+              id: institution.id,
+              name: institution.name,
+            })),
+          }),
+        },
+      });
+      return `Encontramos mais de uma opção. Qual é a certa?\n\n${list}\n\nResponda com o número.`;
+    }
+
+    case ChatState.AWAITING_REGISTRATION_INSTITUTION_CHOICE: {
+      const candidates = context.institutionCandidates ?? [];
+      const chosen = candidates[Number(body.trim()) - 1];
+      if (!chosen) {
+        return "Responda com o número de uma das opções listadas.";
+      }
+      return finishRegistration(session.id, digits, context, chosen);
+    }
+
+    default: {
+      await prisma.chatSession.update({
+        where: { id: session.id },
+        data: { state: ChatState.AWAITING_REGISTRATION_NAME, context: null },
+      });
+      return "Vamos recomeçar seu cadastro. Qual é o seu nome completo?";
+    }
+  }
+}
+
 async function handleMassSchedulesAndEvents(institutionId: string) {
   const [massSchedules, events] = await Promise.all([
     prisma.massSchedule.findMany({
@@ -286,7 +460,7 @@ export async function handleIncomingWhatsAppMessage(
   const member = await findMemberByPhone(digits);
 
   if (!member) {
-    return "Não encontramos seu cadastro em nenhuma paróquia, capela ou comunidade. Entre em contato com a secretaria para se cadastrar.";
+    return handleUnregisteredContact(digits, body);
   }
 
   let session = await prisma.chatSession.findUnique({
