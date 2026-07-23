@@ -41,9 +41,10 @@ function mainMenuText(name: string) {
 
 1️⃣ Horários de missas e eventos
 2️⃣ Enviar pedido de oração
-3️⃣ Contribuir com dízimo ou oferta
-4️⃣ Consultar meu histórico de contribuições
-5️⃣ Falar com a equipe pastoral
+3️⃣ Contribuir com Dízimo
+4️⃣ Contribuir com Oferta
+5️⃣ Consultar meu histórico de contribuições
+6️⃣ Falar com a equipe pastoral
 
 Responda com o número da opção. Digite *0* a qualquer momento para voltar a este menu.`;
 }
@@ -62,16 +63,6 @@ function menuReply(text: string | undefined, memberName: string): BotReply {
     text,
     content: { contentSid: menuContentSid, variables: { "1": memberName } },
   };
-}
-
-function contributionChoiceReply(): BotReply {
-  const contentSid = process.env.TWILIO_CONTRIBUTION_TYPE_CONTENT_SID;
-  if (!contentSid) {
-    return {
-      text: "Você quer contribuir com:\n\n1️⃣ Dízimo\n2️⃣ Oferta\n\nResponda com o número.",
-    };
-  }
-  return { content: { contentSid } };
 }
 
 type MemberWithInstitution = Awaited<ReturnType<typeof findMemberByPhone>>;
@@ -403,16 +394,24 @@ async function handleMainMenuChoice(
       };
 
     case "3":
+    case "4": {
+      const type = choice.trim() === "3" ? "DIZIMO" : "OFERTA";
       await prisma.chatSession.update({
         where: { id: sessionId },
-        data: { state: ChatState.AWAITING_CONTRIBUTION_TYPE },
+        data: {
+          state: ChatState.AWAITING_CONTRIBUTION_AMOUNT,
+          context: JSON.stringify({ type }),
+        },
       });
-      return contributionChoiceReply();
-
-    case "4":
-      return { text: await handleContributionHistory(member.id) };
+      return {
+        text: `Qual valor você deseja contribuir de ${CONTRIBUTION_TYPE_LABELS[type]}? Responda só com o número (ex.: 50 ou 50,00).`,
+      };
+    }
 
     case "5":
+      return { text: await handleContributionHistory(member.id) };
+
+    case "6":
       return { text: await handlePastoralContact(member.institutionId) };
 
     default:
@@ -444,30 +443,6 @@ async function handlePrayerRequest(
     "Recebemos seu pedido de oração. 🙏 Nossa comunidade vai rezar por essa intenção.",
     member.name,
   );
-}
-
-async function handleContributionType(
-  sessionId: string,
-  body: string,
-): Promise<BotReply> {
-  const choice = body.trim();
-  if (choice !== "1" && choice !== "2") {
-    return { text: "Responda com *1* para Dízimo ou *2* para Oferta." };
-  }
-
-  const type = choice === "1" ? "DIZIMO" : "OFERTA";
-
-  await prisma.chatSession.update({
-    where: { id: sessionId },
-    data: {
-      state: ChatState.AWAITING_CONTRIBUTION_AMOUNT,
-      context: JSON.stringify({ type }),
-    },
-  });
-
-  return {
-    text: "Qual valor você deseja contribuir? Responda só com o número (ex.: 50 ou 50,00).",
-  };
 }
 
 async function handleContributionAmount(
@@ -580,8 +555,6 @@ export async function handleIncomingWhatsAppMessage(
   switch (session.state) {
     case ChatState.AWAITING_PRAYER_REQUEST:
       return handlePrayerRequest(member, session.id, digits, body);
-    case ChatState.AWAITING_CONTRIBUTION_TYPE:
-      return handleContributionType(session.id, body);
     case ChatState.AWAITING_CONTRIBUTION_AMOUNT:
       return handleContributionAmount(member, session.id, session.context, body);
     case ChatState.MAIN_MENU:
