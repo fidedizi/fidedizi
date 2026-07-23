@@ -232,6 +232,11 @@ async function handleUnregisteredContact(digits: string, body: string) {
   }
 }
 
+function joinWithAnd(items: string[]) {
+  if (items.length <= 1) return items.join("");
+  return `${items.slice(0, -1).join(", ")} e ${items[items.length - 1]}`;
+}
+
 async function handleMassSchedulesAndEvents(institutionId: string) {
   const [massSchedules, events] = await Promise.all([
     prisma.massSchedule.findMany({
@@ -252,12 +257,22 @@ async function handleMassSchedulesAndEvents(institutionId: string) {
   const sections: string[] = [];
 
   if (massSchedules.length > 0) {
-    const list = massSchedules
-      .map((schedule) => {
-        const description = schedule.description
-          ? ` — ${schedule.description}`
-          : "";
-        return `⛪ ${WEEKDAY_LABELS[schedule.dayOfWeek]}, ${schedule.time}${description}`;
+    const byDay = new Map<string, typeof massSchedules>();
+    for (const schedule of massSchedules) {
+      const existing = byDay.get(schedule.dayOfWeek) ?? [];
+      existing.push(schedule);
+      byDay.set(schedule.dayOfWeek, existing);
+    }
+
+    const list = Array.from(byDay.entries())
+      .map(([day, daySchedules]) => {
+        const times = joinWithAnd(
+          daySchedules.map(
+            (schedule) =>
+              `${schedule.time}h${schedule.description ? ` (${schedule.description})` : ""}`,
+          ),
+        );
+        return `⛪ ${WEEKDAY_LABELS[day]}, ${times}`;
       })
       .join("\n");
     sections.push(`Horários de missa:\n\n${list}`);
