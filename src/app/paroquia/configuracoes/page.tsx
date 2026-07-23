@@ -14,6 +14,8 @@ export default async function ConfiguracoesPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      <h2 className="text-xl font-semibold text-slate-800">Configurações</h2>
+
       <InstitutionPixForm pixKey={institution.pixKey ?? ""} />
 
       <h3 className="text-lg font-semibold text-slate-800">
