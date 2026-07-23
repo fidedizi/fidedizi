@@ -263,6 +263,33 @@ function menuReply(
 
 // Resolve a resposta do usuário (id semântico vindo de um botão tocado, ou
 // número digitado à mão) para o id da opção de menu correspondente.
+// Uma saudação solta ("oi", "bom dia"...) não é uma opção de menu inválida —
+// deve só reabrir o menu, sem o texto de "não entendi" (que soaria como um
+// erro em resposta a algo que nem era uma tentativa de escolher uma opção).
+const GREETING_WORDS = new Set([
+  "oi",
+  "ola",
+  "olá",
+  "oii",
+  "oie",
+  "opa",
+  "alo",
+  "alô",
+  "eae",
+  "e ai",
+  "e aí",
+  "bom dia",
+  "boa tarde",
+  "boa noite",
+  "hello",
+  "hi",
+]);
+
+function isMenuResetTrigger(body: string) {
+  const normalized = body.trim().toLowerCase();
+  return normalized === "0" || normalized === "menu" || GREETING_WORDS.has(normalized);
+}
+
 function resolveMenuChoice(choice: string, options: MenuOption[]) {
   const trimmed = choice.trim();
   if (options.some((option) => option.id === trimmed)) {
@@ -1436,7 +1463,7 @@ export async function handleIncomingWhatsAppMessage(
     member.institutionId,
   );
 
-  if (isFirstContact || body === "0" || body.toLowerCase() === "menu") {
+  if (isFirstContact || isMenuResetTrigger(body)) {
     await prisma.chatSession.update({
       where: { id: session.id },
       data: { state: ChatState.MAIN_MENU, context: null },
