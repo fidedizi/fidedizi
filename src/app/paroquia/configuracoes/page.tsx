@@ -3,8 +3,10 @@ import { requirePermission } from "@/lib/permissions";
 import { PermissionModule } from "@/generated/prisma/client";
 import { listFlags } from "@/lib/queries/members";
 import { OVERDUE_FLAG_NAME } from "@/lib/overdue";
+import { stripCountryCode } from "@/lib/whatsapp";
 import { FlagForm } from "./flag-form";
 import { InstitutionPixForm } from "./institution-pix-form";
+import { SecretariaWhatsappForm } from "./secretaria-whatsapp-form";
 
 export default async function ConfiguracoesPage() {
   const { user, institution } = await requireParoquiaContext();
@@ -50,6 +52,10 @@ export default async function ConfiguracoesPage() {
           </tbody>
         </table>
       </div>
+
+      <SecretariaWhatsappForm
+        phone={institution.phone ? stripCountryCode(institution.phone) : ""}
+      />
     </div>
   );
 }

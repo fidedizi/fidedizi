@@ -16,14 +16,14 @@ export async function getSelectedInstitution(paroquiaId: string) {
   if (selectedId && selectedId !== paroquiaId) {
     const subUnit = await prisma.institution.findFirst({
       where: { id: selectedId, parentId: paroquiaId },
-      select: { id: true, name: true, type: true, pixKey: true },
+      select: { id: true, name: true, type: true, pixKey: true, phone: true },
     });
     if (subUnit) return subUnit;
   }
 
   const parish = await prisma.institution.findUnique({
     where: { id: paroquiaId },
-    select: { id: true, name: true, type: true, pixKey: true },
+    select: { id: true, name: true, type: true, pixKey: true, phone: true },
   });
 
   return parish!;
