@@ -18,6 +18,7 @@ type EventDefaults = {
   childPrice: string;
   capacity: string;
   status: string;
+  availableInChatbot?: boolean;
 };
 
 function EventFormFields({
@@ -207,6 +208,18 @@ function EventFormFields({
             ))}
           </select>
         </div>
+      </div>
+
+      <div className="flex items-center">
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            name="availableInChatbot"
+            value="true"
+            defaultChecked={defaults?.availableInChatbot}
+          />
+          Disponibilizar no chatbot do WhatsApp
+        </label>
       </div>
 
       <div className="flex items-center gap-3">

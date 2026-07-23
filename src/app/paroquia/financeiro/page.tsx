@@ -9,6 +9,7 @@ import { listMemberSearchOptions } from "@/lib/queries/members";
 import { formatBRL } from "@/lib/format";
 import { formatWhatsApp } from "@/lib/whatsapp";
 import { ResendReceiptButton } from "@/components/resend-receipt-button";
+import { ConfirmPaymentButton } from "@/components/confirm-payment-button";
 import { CashEntryForm } from "./cash-entry-form";
 
 const TYPE_LABELS: Record<string, string> = {
@@ -22,6 +23,16 @@ const METHOD_LABELS: Record<string, string> = {
   PIX: "PIX",
   CARTAO: "Cartão",
   ESPECIE: "Espécie",
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  PENDING: "Pendente",
+  CONFIRMED: "Confirmado",
+};
+
+const STATUS_BADGE_CLASSES: Record<string, string> = {
+  PENDING: "bg-amber-100 text-amber-700",
+  CONFIRMED: "bg-emerald-100 text-emerald-700",
 };
 
 export default async function FinanceiroPage() {
@@ -58,6 +69,7 @@ export default async function FinanceiroPage() {
               <th className="px-4 py-2 font-medium">Data</th>
               <th className="px-4 py-2 font-medium">Tipo</th>
               <th className="px-4 py-2 font-medium">Método</th>
+              <th className="px-4 py-2 font-medium">Status</th>
               <th className="px-4 py-2 font-medium">Valor Bruto</th>
               <th className="px-4 py-2 font-medium">Valor Líquido</th>
               <th className="px-4 py-2 font-medium">Nome do Fiel</th>
@@ -69,7 +81,7 @@ export default async function FinanceiroPage() {
             {contributions.length === 0 && (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="px-4 py-6 text-center text-slate-400"
                 >
                   Nenhum lançamento registrado ainda.
@@ -92,12 +104,22 @@ export default async function FinanceiroPage() {
                   </td>
                   <td className="px-4 py-2">{TYPE_LABELS[c.type]}</td>
                   <td className="px-4 py-2">{METHOD_LABELS[c.method]}</td>
+                  <td className="px-4 py-2">
+                    <span
+                      className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_BADGE_CLASSES[c.status]}`}
+                    >
+                      {STATUS_LABELS[c.status]}
+                    </span>
+                  </td>
                   <td className="px-4 py-2">{formatBRL(c.grossAmount)}</td>
                   <td className="px-4 py-2">{formatBRL(c.netAmount)}</td>
                   <td className="px-4 py-2">{name ?? "—"}</td>
                   <td className="px-4 py-2">{whatsapp ?? "—"}</td>
                   <td className="px-4 py-2">
                     <div className="flex items-center gap-2">
+                      {c.status === "PENDING" && (
+                        <ConfirmPaymentButton contributionId={c.id} />
+                      )}
                       {whatsapp && <ResendReceiptButton contributionId={c.id} />}
                       <Link
                         href={`/paroquia/financeiro/recibo/${c.id}`}

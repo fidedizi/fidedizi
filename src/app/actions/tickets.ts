@@ -199,6 +199,14 @@ export async function validateTicket(
     return { message: "Ingresso não encontrado.", success: false };
   }
 
+  if (ticket.status === TicketStatus.AWAITING_PAYMENT) {
+    return {
+      message:
+        "Ingresso aguardando confirmação de pagamento. Confirme o Pix em Financeiro antes de liberar a entrada.",
+      success: false,
+    };
+  }
+
   if (ticket.status === TicketStatus.USED) {
     return {
       message: `Ingresso já utilizado em ${ticket.usedAt?.toLocaleString("pt-BR")}.`,

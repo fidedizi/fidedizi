@@ -417,6 +417,10 @@ model Event {
   capacity    Int
   status      EventStatus @default(ATIVO)
 
+  // Libera a opção "Eventos & Festas" no menu do chatbot de WhatsApp,
+  // permitindo comprar ingressos por lá (respeitando a capacidade restante).
+  availableInChatbot Boolean @default(false)
+
   tickets Ticket[]
 
   createdAt DateTime @default(now())
@@ -431,6 +435,9 @@ enum TicketCategory {
 }
 
 enum TicketStatus {
+  // Reservado por uma compra pelo chatbot cujo Pix ainda não foi confirmado
+  // por um administrador — o Scanner recusa entrada enquanto estiver assim.
+  AWAITING_PAYMENT
   VALID
   USED
   CANCELLED
@@ -524,6 +531,9 @@ enum ChatState {
   AWAITING_RAFFLE_QUANTITY
   AWAITING_PIZZA_FLAVOR
   AWAITING_PIZZA_QUANTITY
+  AWAITING_EVENT_CHOICE
+  AWAITING_EVENT_ADULT_COUNT
+  AWAITING_EVENT_CHILD_COUNT
 }
 
 // Uma sessão por número de telefone — guarda em que ponto da conversa o fiel

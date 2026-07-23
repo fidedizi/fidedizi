@@ -118,30 +118,38 @@ export async function sellRaffleNumbers(
     institution.id,
   );
 
-  const contribution = await prisma.contribution.create({
-    data: {
-      institutionId: institution.id,
-      campaignId,
-      memberId: member?.id,
-      type: ContributionType.CAMPANHA,
-      method: paymentMethod,
-      status: ContributionStatus.CONFIRMED,
-      grossAmount: totalAmount,
-      feeAmount,
-      netAmount,
-      buyerName,
-      buyerPhone,
-    },
+  // Usa o maior número já atribuído (não a contagem) para gerar os próximos,
+  // já que a contagem pode ficar defasada do maior número em uso se algum
+  // número for cancelado/excluído no meio da faixa.
+  const maxNumberAgg = await prisma.raffleNumber.aggregate({
+    where: { campaignId },
+    _max: { number: true },
   });
+  const nextStart = maxNumberAgg._max.number ?? 0;
+  const numbers = Array.from({ length: quantity }, (_, i) => nextStart + i + 1);
 
-  const numbers = Array.from(
-    { length: quantity },
-    (_, i) => soldCount + i + 1,
-  );
+  // Contribuição e números da rifa precisam nascer juntos: se a atribuição
+  // dos números falhar (ex.: número já ocupado), a contribuição não pode
+  // ficar órfã sem número nenhum vinculado.
+  const contribution = await prisma.$transaction(async (tx) => {
+    const contribution = await tx.contribution.create({
+      data: {
+        institutionId: institution.id,
+        campaignId,
+        memberId: member?.id,
+        type: ContributionType.CAMPANHA,
+        method: paymentMethod,
+        status: ContributionStatus.CONFIRMED,
+        grossAmount: totalAmount,
+        feeAmount,
+        netAmount,
+        buyerName,
+        buyerPhone,
+      },
+    });
 
-  await prisma.$transaction(
-    numbers.map((number) =>
-      prisma.raffleNumber.create({
+    for (const number of numbers) {
+      await tx.raffleNumber.create({
         data: {
           campaignId,
           number,
@@ -149,9 +157,11 @@ export async function sellRaffleNumbers(
           buyerName,
           buyerPhone,
         },
-      }),
-    ),
-  );
+      });
+    }
+
+    return contribution;
+  });
 
   const template = await prisma.messageTemplate.findUnique({
     where: {

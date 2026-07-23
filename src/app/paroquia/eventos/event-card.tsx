@@ -30,6 +30,7 @@ type EventCardProps = {
     childPrice: { toString(): string };
     capacity: number;
     status: string;
+    availableInChatbot: boolean;
     sold: number;
     revenue: number;
   };
@@ -127,6 +128,7 @@ export function EventCard({ event, memberOptions }: EventCardProps) {
             childPrice: childPrice.toString(),
             capacity: event.capacity.toString(),
             status: event.status,
+            availableInChatbot: event.availableInChatbot,
           }}
         />
         <DeleteEventButton eventId={event.id} />

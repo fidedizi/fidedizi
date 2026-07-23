@@ -19,6 +19,7 @@ function parseEventFields(formData: FormData) {
     childPrice: formData.get("childPrice"),
     capacity: formData.get("capacity"),
     status: formData.get("status"),
+    availableInChatbot: formData.get("availableInChatbot"),
   });
 
   if (!validatedFields.success) {
@@ -39,8 +40,17 @@ export async function createEvent(_state: EventFormState, formData: FormData) {
     return { errors: parsed.errors };
   }
 
-  const { title, description, location, adultPrice, childPrice, capacity, status, startsAt } =
-    parsed.data;
+  const {
+    title,
+    description,
+    location,
+    adultPrice,
+    childPrice,
+    capacity,
+    status,
+    availableInChatbot,
+    startsAt,
+  } = parsed.data;
 
   const effectiveEnd = new Date(startsAt.getTime() + DEFAULT_DURATION_MS);
 
@@ -65,6 +75,7 @@ export async function createEvent(_state: EventFormState, formData: FormData) {
       childPrice,
       capacity,
       status,
+      availableInChatbot: availableInChatbot ?? false,
     },
   });
 
@@ -99,8 +110,17 @@ export async function updateEvent(
     return { errors: parsed.errors };
   }
 
-  const { title, description, location, adultPrice, childPrice, capacity, status, startsAt } =
-    parsed.data;
+  const {
+    title,
+    description,
+    location,
+    adultPrice,
+    childPrice,
+    capacity,
+    status,
+    availableInChatbot,
+    startsAt,
+  } = parsed.data;
 
   await prisma.event.update({
     where: { id: eventId },
@@ -113,6 +133,7 @@ export async function updateEvent(
       childPrice,
       capacity,
       status,
+      availableInChatbot: availableInChatbot ?? false,
     },
   });
 

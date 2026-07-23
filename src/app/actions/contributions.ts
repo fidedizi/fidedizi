@@ -7,6 +7,7 @@ import {
   ContributionMethod,
   ContributionStatus,
   MessageTrigger,
+  TicketStatus,
 } from "@/generated/prisma/client";
 import {
   CashEntryFormSchema,
@@ -188,4 +189,59 @@ export async function resendReceipt(
   }
 
   return { message: "Recibo reenviado com sucesso." };
+}
+
+export type ConfirmPaymentState = { message?: string; error?: string } | undefined;
+
+// Confirma manualmente o pagamento de uma contribuição PENDING (criada por
+// uma compra self-service pelo chatbot). Para EVENTO, também libera os
+// ingressos que estavam com status AWAITING_PAYMENT, já que só a partir
+// daqui o Scanner passa a aceitar a entrada.
+export async function confirmContributionPayment(
+  _state: ConfirmPaymentState,
+  formData: FormData,
+) {
+  const { institution } = await requireParoquiaContext();
+  const contributionId = formData.get("contributionId");
+
+  if (typeof contributionId !== "string" || !contributionId) {
+    return { error: "Contribuição inválida." };
+  }
+
+  const contribution = await prisma.contribution.findFirst({
+    where: { id: contributionId, institutionId: institution.id },
+  });
+
+  if (!contribution) {
+    return { error: "Contribuição não encontrada." };
+  }
+
+  if (contribution.status !== ContributionStatus.PENDING) {
+    return { error: "Esta contribuição não está pendente de confirmação." };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.contribution.update({
+      where: { id: contribution.id },
+      data: { status: ContributionStatus.CONFIRMED },
+    });
+
+    if (contribution.type === "EVENTO") {
+      await tx.ticket.updateMany({
+        where: {
+          contributionId: contribution.id,
+          status: TicketStatus.AWAITING_PAYMENT,
+        },
+        data: { status: TicketStatus.VALID },
+      });
+    }
+  });
+
+  revalidatePath("/paroquia/financeiro");
+  revalidatePath("/paroquia/eventos");
+  if (contribution.memberId) {
+    revalidatePath(`/paroquia/membros/${contribution.memberId}`);
+  }
+
+  return { message: "Pagamento confirmado com sucesso." };
 }

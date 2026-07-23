@@ -513,6 +513,7 @@ export const EventFormSchema = z.object({
     .int({ error: "A capacidade deve ser um número inteiro." })
     .positive({ error: "A capacidade deve ser maior que zero." }),
   status: z.enum(EVENT_STATUSES, { error: "Selecione um status." }),
+  availableInChatbot: z.coerce.boolean().optional(),
 });
 
 export type EventFormState =
@@ -527,6 +528,7 @@ export type EventFormState =
         childPrice?: string[];
         capacity?: string[];
         status?: string[];
+        availableInChatbot?: string[];
       };
       message?: string;
       error?: string;
