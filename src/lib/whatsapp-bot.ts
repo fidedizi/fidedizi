@@ -661,14 +661,14 @@ async function startCampaignFlow(
       },
     });
     return {
-      text: `Restam ${campaign.remaining} número(s) da rifa "${campaign.title}" (${formatBRL(campaign.unitPrice)} cada). Quantos números você deseja comprar?`,
+      text: `Rifa "${campaign.title}" (${formatBRL(campaign.unitPrice)} cada número). Quantos números você deseja comprar?`,
     };
   }
 
   const list = campaign.flavors
     .map(
       (flavor, index) =>
-        `${index + 1}️⃣ ${flavor.name} — ${formatBRL(flavor.price)} (${flavor.remaining} disponível(is))`,
+        `${index + 1}️⃣ ${flavor.name} — ${formatBRL(flavor.price)}`,
     )
     .join("\n");
 
@@ -838,7 +838,7 @@ async function handleRaffleQuantity(
 
   if (quantity > remaining) {
     return {
-      text: `Só restam ${remaining} número(s) disponível(is) para esta rifa. Responda com uma quantidade menor.`,
+      text: "Quantidade indisponível para esta rifa no momento. Responda com uma quantidade menor.",
     };
   }
 
@@ -940,7 +940,7 @@ async function handlePizzaFlavorChoice(
   });
 
   return {
-    text: `Quantas pizzas de ${chosen.name} você deseja? (restam ${chosen.remaining})`,
+    text: `Quantas pizzas de ${chosen.name} você deseja?`,
   };
 }
 
@@ -991,7 +991,7 @@ async function handlePizzaQuantity(
 
   if (quantity > remaining) {
     return {
-      text: `Só restam ${remaining} unidade(s) de ${flavor.name}. Responda com uma quantidade menor.`,
+      text: `Quantidade indisponível para ${flavor.name} no momento. Responda com uma quantidade menor.`,
     };
   }
 
@@ -1065,7 +1065,7 @@ async function startEventFlow(
     },
   });
   return {
-    text: `Ingressos para "${event.title}" — Adulto: ${formatBRL(event.adultPrice)}, Criança: ${formatBRL(event.childPrice)} (restam ${event.remaining}).\n\nQuantos ingressos ADULTO você deseja? Responda com 0 se não quiser nenhum.`,
+    text: `Ingressos para "${event.title}" — Adulto: ${formatBRL(event.adultPrice)}, Criança: ${formatBRL(event.childPrice)}.\n\nQuantos ingressos ADULTO você deseja? Responda com 0 se não quiser nenhum.`,
   };
 }
 
@@ -1214,7 +1214,7 @@ async function handleEventChildCount(
       },
     });
     return {
-      text: `Só restam ${remaining} ingresso(s) no total para este evento. Quantos ingressos ADULTO você deseja? Responda com 0 se não quiser nenhum.`,
+      text: "Quantidade indisponível para este evento no momento. Quantos ingressos ADULTO você deseja? Responda com 0 se não quiser nenhum.",
     };
   }
 
