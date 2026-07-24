@@ -617,10 +617,15 @@ async function handlePastoralContact(institutionId: string) {
     where: { id: institutionId },
   });
 
-  const lines = [
-    institution?.phone ? `📞 ${formatWhatsApp(institution.phone)}` : null,
-    institution?.email ? `✉️ ${institution.email}` : null,
-  ].filter((line): line is string => Boolean(line));
+  const lines: string[] = [];
+  if (institution?.phone) {
+    const digits = institution.phone.replace(/\D/g, "");
+    lines.push(`📞 ${formatWhatsApp(institution.phone)}`);
+    lines.push(`👉 https://wa.me/${digits}`);
+  }
+  if (institution?.email) {
+    lines.push(`✉️ ${institution.email}`);
+  }
 
   if (lines.length === 0) {
     return "Ainda não temos um contato direto cadastrado. Fale com a secretaria durante o horário de atendimento.";
